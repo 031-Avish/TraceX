@@ -5,6 +5,9 @@
 const PII_PATTERNS = [
   { pattern: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, replacement: "[EMAIL_REDACTED]" },
   { pattern: /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, replacement: "[IP_REDACTED]" },
+  // Requires separators (dash/dot/space) so it doesn't collide with plain digit
+  // sequences that show up constantly in this domain — counts, revisions, ports.
+  { pattern: /\b(?:\+?\d{1,3}[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/g, replacement: "[PHONE_REDACTED]" },
   { pattern: /AKIA[0-9A-Z]{16}/g, replacement: "[AWS_KEY_REDACTED]" },
   { pattern: /(?:aws_secret_access_key|aws_session_token)["\s:=]+["']?([a-zA-Z0-9/+=]{20,})["']?/gi, replacement: "[AWS_SECRET_REDACTED]" },
   { pattern: /(?:api[_-]?key|token|secret|password|passwd|authorization)["\s:=]+["']?([a-zA-Z0-9_\-\.]{16,})["']?/gi, replacement: "[TOKEN_REDACTED]" },

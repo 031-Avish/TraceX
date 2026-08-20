@@ -5,15 +5,20 @@
 const { Octokit } = require("@octokit/rest");
 
 class GitHubCommitsCollector {
-  constructor() {
-    this.owner = process.env.GITHUB_REPO_OWNER;
-    this.repo = process.env.GITHUB_REPO_NAME;
+  /**
+   * @param {object} [config] Per-tenant override. Falls back to env vars when
+   * not provided — keeps the single-tenant demo path working unmodified.
+   */
+  constructor(config = {}) {
+    this.owner = config.owner || process.env.GITHUB_REPO_OWNER;
+    this.repo = config.repo || process.env.GITHUB_REPO_NAME;
 
-    if (!process.env.GITHUB_TOKEN) {
-      console.warn("  ⚠ GITHUB_TOKEN not set — commit fetching will be skipped");
+    const token = config.token || process.env.GITHUB_TOKEN;
+    if (!token) {
+      console.warn("  ⚠ No GitHub token configured — commit fetching will be skipped");
       this.octokit = null;
     } else {
-      this.octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+      this.octokit = new Octokit({ auth: token });
     }
   }
 

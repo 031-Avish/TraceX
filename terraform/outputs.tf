@@ -7,6 +7,11 @@ output "payment_api_url" {
   value       = "${aws_apigatewayv2_api.payment_api.api_endpoint}/api/payments"
 }
 
+output "config_api_url" {
+  description = "Connector config API — point console/index.html at this"
+  value       = aws_apigatewayv2_api.config_api.api_endpoint
+}
+
 output "chaos_switch_command" {
   description = "🚨 Run this to BREAK the service and trigger the incident"
   value       = "aws ssm put-parameter --name ${local.chaos_param} --value true --type String --overwrite --region ${var.aws_region}"

@@ -25,7 +25,7 @@ resource "aws_lambda_permission" "sns_invoke" {
 resource "aws_iam_role" "agent_role" {
   name = "presidio-sre-agent-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
@@ -37,21 +37,21 @@ resource "aws_iam_role_policy" "agent_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "ReadAppLogs"
-        Effect = "Allow"
-        Action = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
+        Sid      = "ReadAppLogs"
+        Effect   = "Allow"
+        Action   = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:${local.log_group_name}:*"
       },
       {
-        Sid    = "WriteOwnLogs"
-        Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Sid      = "WriteOwnLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/presidio-sre-agent-triage:*"
       },
       {
-        Sid    = "ReadMetrics"
-        Effect = "Allow"
-        Action = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms"]
+        Sid      = "ReadMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms"]
         Resource = "*"
       }
     ]
@@ -94,14 +94,19 @@ resource "aws_lambda_function" "triage_agent" {
 
   environment {
     variables = {
-      ANTHROPIC_API_KEY  = var.anthropic_api_key
-      SLACK_BOT_TOKEN    = var.slack_bot_token
-      SLACK_CHANNEL_ID   = var.slack_channel_id
-      GITHUB_TOKEN       = var.github_token
-      GITHUB_REPO_OWNER  = var.github_repo_owner
-      GITHUB_REPO_NAME   = var.github_repo_name
-      LOG_GROUP_NAME     = local.log_group_name
-      METRIC_NAMESPACE   = local.metric_namespace
+      AZURE_OPENAI_ENDPOINT    = var.azure_openai_endpoint
+      AZURE_OPENAI_API_KEY     = var.azure_openai_api_key
+      AZURE_OPENAI_DEPLOYMENT  = var.azure_openai_deployment
+      AZURE_OPENAI_API_VERSION = var.azure_openai_api_version
+      SLACK_BOT_TOKEN          = var.slack_bot_token
+      SLACK_CHANNEL_ID         = var.slack_channel_id
+      GITHUB_TOKEN             = var.github_token
+      GITHUB_REPO_OWNER        = var.github_repo_owner
+      GITHUB_REPO_NAME         = var.github_repo_name
+      LOG_GROUP_NAME           = local.log_group_name
+      METRIC_NAMESPACE         = local.metric_namespace
+      CONNECTOR_TABLE_NAME     = aws_dynamodb_table.connector_registry.name
+      TENANT_ID                = "demo"
     }
   }
 

@@ -20,7 +20,7 @@ resource "aws_ssm_parameter" "chaos_mode" {
   type  = "String"
   value = "false"
 
-  lifecycle { ignore_changes = [value] }  # don't reset on re-apply
+  lifecycle { ignore_changes = [value] } # don't reset on re-apply
 }
 
 # ── CloudWatch Log Group (shared by demo app) ────────────────
@@ -33,7 +33,7 @@ resource "aws_cloudwatch_log_group" "app_logs" {
 resource "aws_iam_role" "demo_app_role" {
   name = "presidio-demo-app-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
@@ -139,7 +139,7 @@ resource "aws_lambda_permission" "apigw" {
 resource "aws_iam_role" "traffic_gen_role" {
   name = "presidio-traffic-gen-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
