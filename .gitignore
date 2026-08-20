@@ -1,0 +1,9 @@
+*.tfstate*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+.build/
+node_modules/
+package-lock.json
+.env
+.DS_Store
