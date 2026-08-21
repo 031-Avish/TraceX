@@ -62,7 +62,7 @@ resource "aws_iam_role_policy" "agent_connector_read" {
       {
         Sid      = "ReadConnectorMetadata"
         Effect   = "Allow"
-        Action   = ["dynamodb:Query", "dynamodb:GetItem"]
+        Action   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.connector_registry.arn
       },
       {

@@ -172,7 +172,13 @@ function buildTools(ctx) {
       : logs.getDeploymentLogs(ctx.logGroupName, args.windowMinutes || 30),
     get_service_metrics: (args) => unavailable ? Promise.resolve({ success: false, error: unavailable }) : datadog
       ? datadog.getServiceMetrics(args.windowMinutes || 30)
-      : metrics.getServiceMetrics(ctx.metricNamespace, args.windowMinutes || 30),
+      : metrics.getServiceMetrics({
+          namespace: ctx.metricNamespace,
+          metricName: ctx.metricName,
+          dimensions: ctx.metricDimensions,
+          statistic: ctx.metricStatistic,
+          windowMinutes: args.windowMinutes || 30,
+        }),
     get_alarm_details: () => unavailable ? Promise.resolve({ success: false, error: unavailable }) : datadog
       ? datadog.getAlarmDetails()
       : metrics.getAlarmDetails(ctx.alarmName),

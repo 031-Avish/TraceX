@@ -1,6 +1,6 @@
 // src/collectors/cloudwatch-logs.js
 // Pulls filtered CloudWatch Logs from the client's log group.
-// Only fetches ERROR/FATAL/5xx entries — never raw application logs.
+// Only fetches ERROR/FATAL/4xx/5xx/high-latency entries — never raw application logs.
 
 const {
   CloudWatchLogsClient,
@@ -13,8 +13,9 @@ class CloudWatchLogsCollector {
   }
 
   /**
-   * Fetch recent error/fatal log events from a CloudWatch Log Group.
-   * Uses a filter pattern to only pull 5xx and error-level entries.
+   * Fetch recent actionable log events from a CloudWatch Log Group.
+   * Includes errors, rejected requests, and abnormal latency without pulling
+   * the entire raw application log stream.
    */
   async getRecentErrorLogs(logGroupName, windowMinutes = 15) {
     const endTime = Date.now();
@@ -27,7 +28,7 @@ class CloudWatchLogsCollector {
           startTime,
           endTime,
           // Filter to only error-level logs — keeps token count low
-          filterPattern: '{ $.level = "ERROR" || $.level = "FATAL" || $.statusCode = 500 }',
+          filterPattern: '{ $.level = "ERROR" || $.level = "FATAL" || $.statusCode >= 400 || $.responseTimeMs >= 350 }',
           limit: 50,
         })
       );

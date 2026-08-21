@@ -194,6 +194,7 @@ Cite specific evidence (commit SHAs, file/line, log timestamps) — do not specu
 
 Alarm: ${alarmData.alarmName || "unknown"}
 Description: ${alarmData.description || "threshold exceeded"}
+Metric: ${alarmData.metricNamespace || "unknown"}/${alarmData.metricName || "unknown"} (${alarmData.metricStatistic || "Sum"})
 Client: ${alarmData.client || "unknown"}
 Service: ${alarmData.service || "unknown"}
 Environment: ${alarmData.environment || "unknown"}

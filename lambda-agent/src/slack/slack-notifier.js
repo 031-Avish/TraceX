@@ -15,10 +15,45 @@ class SlackNotifier {
     this.channelId = config.channelId || process.env.SLACK_CHANNEL_ID;
   }
 
+  async postInitialAlert(alarmData) {
+    const severity = String(alarmData.description || "").startsWith("P2") ? "P2" : "P1";
+    const emoji = severity === "P1" ? "🔴" : "🟡";
+    try {
+      const result = await this.client.chat.postMessage({
+        channel: this.channelId,
+        text: `${emoji} ${severity} alert — ${alarmData.alarmName}`,
+        blocks: [
+          {
+            type: "header",
+            text: { type: "plain_text", text: `${emoji} ${severity} Incident Detected`, emoji: true },
+          },
+          {
+            type: "section",
+            fields: [
+              { type: "mrkdwn", text: `*Service*\n\`${sanitize(alarmData.service || "unknown")}\`` },
+              { type: "mrkdwn", text: `*Environment*\n${sanitize(alarmData.environment || "unknown")}` },
+              { type: "mrkdwn", text: `*Alarm*\n\`${sanitize(alarmData.alarmName || "unknown")}\`` },
+              { type: "mrkdwn", text: `*Metric*\n\`${sanitize(alarmData.metricName || "unknown")}\`` },
+            ],
+          },
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: "🤖 TraceX investigation started. Findings will be posted in this thread." }],
+          },
+        ],
+        unfurl_links: false,
+        unfurl_media: false,
+      });
+      return { success: true, messageTs: result.ts, channel: result.channel };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+
   /**
    * Post the full Incident Triage Brief to Slack.
    */
-  async postTriageBrief(triageResult, alarmData, timings = {}) {
+  async postTriageBrief(triageResult, alarmData, timings = {}, threadTs = null) {
     const severity = triageResult.severity || "P1";
     const confidence = triageResult.confidence || 0;
     const sevEmoji = severity === "P1" ? "🔴" : severity === "P2" ? "🟡" : "🟢";
@@ -184,6 +219,7 @@ class SlackNotifier {
     try {
       const result = await this.client.chat.postMessage({
         channel: this.channelId,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
         text: `${sevEmoji} ${severity} Incident Triage Brief — ${alarmData.service || "unknown"} [${alarmData.client || "unknown"}]`,
         blocks,
         unfurl_links: false,
@@ -193,6 +229,30 @@ class SlackNotifier {
       return { success: true, messageTs: result.ts, channel: result.channel };
     } catch (error) {
       console.error(`    Slack post failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+
+  async postRecovery(alarmData, threadTs) {
+    if (!threadTs) return { success: false, error: "No Slack thread found for this incident" };
+    try {
+      const result = await this.client.chat.postMessage({
+        channel: this.channelId,
+        thread_ts: threadTs,
+        text: `✅ Recovered — ${alarmData.alarmName}`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: `✅ *Alarm recovered*\n\`${sanitize(alarmData.alarmName || "unknown")}\` returned to *OK* at ${sanitize(alarmData.stateChangeTime || alarmData.timestamp || new Date().toISOString())}.`,
+            },
+          },
+        ],
+      });
+      return { success: true, messageTs: result.ts, channel: result.channel };
+    } catch (error) {
       return { success: false, error: error.message };
     }
   }

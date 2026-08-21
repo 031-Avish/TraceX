@@ -17,7 +17,7 @@ class CloudWatchMetricsCollector {
    * Fetch metric data for the alerting namespace.
    * Returns time-series arrays the LLM can analyze for anomaly timing.
    */
-  async getServiceMetrics(namespace, windowMinutes = 30) {
+  async getServiceMetrics({ namespace, metricName, dimensions = [], statistic = "Sum", windowMinutes = 30 }) {
     const endTime = new Date();
     const startTime = new Date(endTime.getTime() - windowMinutes * 60 * 1000);
 
@@ -32,10 +32,11 @@ class CloudWatchMetricsCollector {
               MetricStat: {
                 Metric: {
                   Namespace: namespace,
-                  MetricName: "Payment5xxCount",
+                  MetricName: metricName,
+                  Dimensions: dimensions,
                 },
                 Period: 60,
-                Stat: "Sum",
+                Stat: statistic,
               },
               ReturnData: true,
             },

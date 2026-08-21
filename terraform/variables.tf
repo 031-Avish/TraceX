@@ -19,6 +19,14 @@ variable "openrouter_api_key" {
   default   = ""
 }
 
+# Deprecated compatibility alias. New configurations should use
+# openrouter_api_key instead.
+variable "anthropic_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 variable "openrouter_model" {
   type    = string
   default = "anthropic/claude-sonnet-4"

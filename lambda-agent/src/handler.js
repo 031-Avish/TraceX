@@ -2,7 +2,7 @@
 // ═══════════════════════════════════════════════════════════════
 //  PRESIDIO SRE TRIAGE AGENT — Lambda Entry Point
 //  Trigger: SNS event from CloudWatch Alarm
-//  Flow: Alarm → Agent investigates (its own choice of tools) → Slack Brief
+//  Flow: Alarm → Slack parent alert → Agent investigation → threaded brief
 //
 //  This used to run a fixed Promise.all([logs, metrics, commits]) fan-out
 //  for every incident. It now hands the incident to an agent loop that
@@ -19,6 +19,7 @@ const { AgentLoop } = require("./engine/agent-loop");
 const { SlackNotifier } = require("./slack/slack-notifier");
 const { Logger } = require("./utils/logger");
 const { resolveTenantConfig } = require("./config/connector-registry");
+const { createIncident, findLatestIncident, updateIncident } = require("./incidents/incident-store");
 
 let cwClient = null;
 function getCWClient(region) {
@@ -68,10 +69,18 @@ module.exports.main = async (event) => {
   }
 
   const toolCtx = {
+    awsRegion: alarmData.region,
     logGroupName: tenantConfig ? tenantConfig.logGroupName : (process.env.LOG_GROUP_NAME || "/ecs/acme-payment-service"),
-    metricNamespace: tenantConfig ? tenantConfig.metricNamespace : (process.env.METRIC_NAMESPACE || "AcmeApp"),
-    alarmName: tenantConfig ? tenantConfig.alarmName : alarmData.alarmName,
-    observability: tenantConfig?.observability || { provider: "cloudwatch" },
+    metricNamespace: alarmData.metricNamespace || (tenantConfig ? tenantConfig.metricNamespace : (process.env.METRIC_NAMESPACE || "AcmeApp")),
+    metricName: alarmData.metricName || "Payment5xxCount",
+    metricDimensions: alarmData.metricDimensions || [],
+    metricStatistic: alarmData.metricStatistic || "Sum",
+    alarmName: alarmData.alarmName || tenantConfig?.alarmName,
+    // A CloudWatch alarm must be investigated against the CloudWatch metric
+    // and log group that raised it, even when Datadog is also connected.
+    observability: alarmData.metricNamespace
+      ? { provider: "cloudwatch" }
+      : (tenantConfig?.observability || { provider: "cloudwatch" }),
     github: tenantConfig?.github || null,
   };
 
@@ -79,6 +88,45 @@ module.exports.main = async (event) => {
   const tools = buildTools(toolCtx);
   const agent = new AgentLoop({ llmClient, tools, log });
   const slackNotifier = new SlackNotifier(tenantConfig?.slack || {});
+
+  if (alarmData.newState === "OK") {
+    const incident = await findLatestIncident(tenantId, alarmData.alarmName);
+    if (!incident?.slackThreadTs) {
+      log.warn(`No Slack thread found for recovered alarm ${alarmData.alarmName}`);
+      return response("recovery_unmatched", { slackPosted: false });
+    }
+    if (incident.state === "recovered") {
+      log.warn(`Duplicate recovery delivery ignored: ${incident.sk}`);
+      return response("duplicate_recovery_ignored", { slackPosted: true });
+    }
+    const recovery = await slackNotifier.postRecovery(alarmData, incident.slackThreadTs);
+    if (recovery.success) {
+      await updateIncident(tenantId, incident.sk, {
+        state: "recovered",
+        recoveredAt: alarmData.stateChangeTime || alarmData.timestamp || new Date().toISOString(),
+      });
+    }
+    return response("recovery_processed", { slackPosted: recovery.success, error: recovery.error });
+  }
+
+  const incident = await createIncident(tenantId, alarmData);
+  if (!incident.created) {
+    log.warn(`Duplicate alarm delivery ignored: ${incident.sk}`);
+    return response("duplicate_ignored", { slackPosted: Boolean(incident.item?.slackThreadTs) });
+  }
+
+  let initialAlert = await slackNotifier.postInitialAlert(alarmData);
+  if (initialAlert.success) {
+    await updateIncident(tenantId, incident.sk, {
+      state: "investigating",
+      slackChannelId: initialAlert.channel,
+      slackThreadTs: initialAlert.messageTs,
+    });
+    log.ok(`Initial alert posted to Slack (thread: ${initialAlert.messageTs})`);
+  } else {
+    await updateIncident(tenantId, incident.sk, { state: "slack_alert_failed", error: initialAlert.error });
+    log.error(`Initial Slack alert failed: ${initialAlert.error}`);
+  }
 
   // ═══════════════════════════════════════════
   //  STEP 1: Agent investigates — its own choice of tools
@@ -98,13 +146,37 @@ module.exports.main = async (event) => {
   // ═══════════════════════════════════════════
   log.step(2, "POSTING INCIDENT TRIAGE BRIEF TO SLACK");
 
-  const slackResult = await slackNotifier.postTriageBrief(triageResult, alarmData);
+  // Never create an orphan standalone report. Retry the parent alert once,
+  // then post the report only when Slack has returned a thread timestamp.
+  if (!initialAlert.success) {
+    initialAlert = await slackNotifier.postInitialAlert(alarmData);
+    if (initialAlert.success) {
+      await updateIncident(tenantId, incident.sk, {
+        state: "investigating",
+        slackChannelId: initialAlert.channel,
+        slackThreadTs: initialAlert.messageTs,
+      });
+    }
+  }
+
+  const slackResult = initialAlert.success
+    ? await slackNotifier.postTriageBrief(triageResult, alarmData, {}, initialAlert.messageTs)
+    : { success: false, error: `Could not create Slack parent alert: ${initialAlert.error}` };
 
   if (slackResult.success) {
     log.ok(`Triage brief posted to Slack (ts: ${slackResult.messageTs})`);
   } else {
     log.error(`Slack post failed: ${slackResult.error}`);
   }
+
+  await updateIncident(tenantId, incident.sk, {
+    state: slackResult.success ? "reported" : "report_failed",
+    completedAt: new Date().toISOString(),
+    confidence: triageResult.confidence,
+    severity: triageResult.severity,
+    reportMessageTs: slackResult.messageTs || "",
+    ...(slackResult.error ? { error: slackResult.error } : {}),
+  });
 
   // ═══════════════════════════════════════════
   //  DONE
@@ -127,6 +199,10 @@ module.exports.main = async (event) => {
   };
 };
 
+function response(status, details = {}) {
+  return { statusCode: 200, body: JSON.stringify({ status, ...details }) };
+}
+
 // ─── SNS Event Parser ────────────────────────────────────────
 // Tags expected on every aws_cloudwatch_metric_alarm resource:
 //   Client      → human-readable tenant/org name  (e.g. "ShopCo")
@@ -143,7 +219,9 @@ async function parseAlarmEvent(event) {
     if (snsRecord) {
       const message = JSON.parse(snsRecord.Message);
       const alarmName = message.AlarmName || "unknown-alarm";
-      const region = message.Region || process.env.AWS_REGION || "us-east-1";
+      // CloudWatch's Region field can be a display name; the Alarm ARN always
+      // contains the SDK-compatible region code.
+      const region = message.AlarmArn?.split(":")[3] || process.env.AWS_REGION || "us-east-1";
 
       // Alarm tags are the authoritative source of identity. Fetched once via
       // DescribeAlarms → ListTagsForResource. Falls back gracefully if the call
@@ -163,8 +241,15 @@ async function parseAlarmEvent(event) {
         stateChangeTime: message.StateChangeTime || null,
         oldState: message.OldStateValue || null,
         newState: message.NewStateValue || "ALARM",
-        client:      tags.Client      || tags.client      || "unknown-client",
-        service:     tags.Service     || tags.service     || dimService || "unknown-service",
+        metricNamespace: message.Trigger?.Namespace || null,
+        metricName: message.Trigger?.MetricName || null,
+        metricStatistic: message.Trigger?.Statistic || message.Trigger?.ExtendedStatistic || "Sum",
+        metricDimensions: (message.Trigger?.Dimensions || []).map((dimension) => ({
+          Name: dimension.name || dimension.Name,
+          Value: dimension.value || dimension.Value,
+        })),
+        client: tags.Client || tags.client || "unknown-client",
+        service: tags.Service || tags.service || dimService || "unknown-service",
         environment: tags.Environment || tags.environment || "production",
       };
     }
@@ -175,12 +260,19 @@ async function parseAlarmEvent(event) {
   // ── Direct invocation (local testing / manual Lambda invoke) ──
   // Caller may pass these fields explicitly; nothing is hardcoded.
   return {
-    alarmName:   event.alarmName   || "unknown-alarm",
+    alarmName: event.alarmName || "unknown-alarm",
     description: event.description || "",
-    region:      event.region      || process.env.AWS_REGION || "us-east-1",
-    timestamp:   event.timestamp   || new Date().toISOString(),
-    client:      event.client      || process.env.DEFAULT_CLIENT      || "unknown-client",
-    service:     event.service     || process.env.DEFAULT_SERVICE     || "unknown-service",
+    region: event.region || process.env.AWS_REGION || "us-east-1",
+    timestamp: event.timestamp || new Date().toISOString(),
+    stateChangeTime: event.stateChangeTime || null,
+    oldState: event.oldState || null,
+    newState: event.newState || "ALARM",
+    client: event.client || process.env.DEFAULT_CLIENT || "unknown-client",
+    service: event.service || process.env.DEFAULT_SERVICE || "unknown-service",
     environment: event.environment || process.env.DEFAULT_ENVIRONMENT || "production",
+    metricNamespace: event.metricNamespace || null,
+    metricName: event.metricName || null,
+    metricStatistic: event.metricStatistic || "Sum",
+    metricDimensions: event.metricDimensions || [],
   };
 }

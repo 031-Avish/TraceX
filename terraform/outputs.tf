@@ -41,6 +41,16 @@ output "alarm_name" {
   value = local.alarm_name
 }
 
+output "alarm_names" {
+  description = "All payment-service alarms routed through SNS to the triage agent and Slack"
+  value = [
+    local.alarm_name,
+    local.alarm_4xx_name,
+    local.alarm_latency_name,
+    local.alarm_fatal_name,
+  ]
+}
+
 output "sns_topic_arn" {
   value = aws_sns_topic.incident_alarms.arn
 }

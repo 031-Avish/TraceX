@@ -7,10 +7,13 @@
 # ═══════════════════════════════════════════════════════════════
 
 locals {
-  log_group_name   = "/ecs/acme-payment-service"
-  metric_namespace = "AcmeApp"
-  alarm_name       = "acme-payment-5xx-critical"
-  chaos_param      = "/presidio-demo/chaos-mode"
+  log_group_name     = "/ecs/acme-payment-service"
+  metric_namespace   = "AcmeApp"
+  alarm_name         = "acme-payment-5xx-critical"
+  alarm_4xx_name     = "acme-payment-4xx-warning"
+  alarm_latency_name = "acme-payment-high-latency"
+  alarm_fatal_name   = "acme-payment-fatal-error"
+  chaos_param        = "/presidio-demo/chaos-mode"
 }
 
 # ── SSM Parameter: The Chaos Switch ──────────────────────────
@@ -226,6 +229,45 @@ resource "aws_cloudwatch_log_metric_filter" "error_5xx" {
   }
 }
 
+resource "aws_cloudwatch_log_metric_filter" "error_4xx" {
+  name           = "payment-4xx-filter"
+  log_group_name = aws_cloudwatch_log_group.app_logs.name
+  pattern        = "{ $.statusCode >= 400 && $.statusCode < 500 }"
+
+  metric_transformation {
+    name          = "Payment4xxCount"
+    namespace     = local.metric_namespace
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "request_latency" {
+  name           = "payment-latency-filter"
+  log_group_name = aws_cloudwatch_log_group.app_logs.name
+  pattern        = "{ $.responseTimeMs = * }"
+
+  metric_transformation {
+    name      = "PaymentLatency"
+    namespace = local.metric_namespace
+    value     = "$.responseTimeMs"
+    unit      = "Milliseconds"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "fatal_errors" {
+  name           = "payment-fatal-filter"
+  log_group_name = aws_cloudwatch_log_group.app_logs.name
+  pattern        = "{ $.level = \"FATAL\" }"
+
+  metric_transformation {
+    name          = "PaymentFatalCount"
+    namespace     = local.metric_namespace
+    value         = "1"
+    default_value = "0"
+  }
+}
+
 resource "aws_cloudwatch_metric_alarm" "payment_5xx" {
   alarm_name          = local.alarm_name
   alarm_description   = "P1: Acme Corp payment-service 5xx error rate exceeded threshold"
@@ -239,6 +281,58 @@ resource "aws_cloudwatch_metric_alarm" "payment_5xx" {
   treat_missing_data  = "notBreaching"
 
   alarm_actions = [aws_sns_topic.incident_alarms.arn]
+  ok_actions    = [aws_sns_topic.incident_alarms.arn]
 
-  tags = { Client = "acme-corp", Service = "payment-service" }
+  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P1" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "payment_4xx" {
+  alarm_name          = local.alarm_4xx_name
+  alarm_description   = "P2: Acme Corp payment-service 4xx responses exceeded threshold"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Payment4xxCount"
+  namespace           = local.metric_namespace
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 3
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.incident_alarms.arn]
+  ok_actions          = [aws_sns_topic.incident_alarms.arn]
+
+  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P2" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "payment_high_latency" {
+  alarm_name          = local.alarm_latency_name
+  alarm_description   = "P2: Acme Corp payment-service average latency exceeded 350 ms"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PaymentLatency"
+  namespace           = local.metric_namespace
+  period              = 60
+  statistic           = "Average"
+  threshold           = 350
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.incident_alarms.arn]
+  ok_actions          = [aws_sns_topic.incident_alarms.arn]
+
+  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P2" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "payment_fatal" {
+  alarm_name          = local.alarm_fatal_name
+  alarm_description   = "P1: Acme Corp payment-service emitted a fatal error"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PaymentFatalCount"
+  namespace           = local.metric_namespace
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.incident_alarms.arn]
+  ok_actions          = [aws_sns_topic.incident_alarms.arn]
+
+  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P1" }
 }
