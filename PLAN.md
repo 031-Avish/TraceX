@@ -197,13 +197,26 @@ undermining the whole point of the exercise.
   `currency.toUpperCase()`/`amount.toFixed()` calls that throw a real `TypeError` on null input
 - All 3 chaos scenarios (payment outage, inventory exhaustion, cascading order+payment failure)
   are actually wired to SSM parameters in the application code, not just present in the plan doc
-- Terraform: one Lambda per service behind a **Lambda Function URL** (switched from one API
-  Gateway per service — 4 gateways were pure overhead for calls that never leave the stack;
-  Function URLs use the same v2.0 payload shape API Gateway HTTP APIs do, so the swap needed
-  zero application-code changes, confirmed by grepping all 4 handlers for `rawPath`/`requestContext`
-  before making the change), IAM scoped per-service, alarms wired to *this* repo's real SNS topic
-  (the one hard dependency between the two stacks) — verified with a real `terraform plan` against
-  live AWS credentials, 43 to add (down from 59), 0 errors. Not yet `apply`'d.
+- Terraform: one Lambda + API Gateway per service, IAM scoped per-service, alarms wired to
+  *this* repo's real SNS topic (the one hard dependency between the two stacks) — deployed for
+  real against live AWS credentials and confirmed working end to end (traffic generator batches
+  hitting 8/8 success, 0% error rate).
+- **Tried Lambda Function URLs instead of API Gateway** (4 gateways looked like pure overhead for
+  calls that never leave the stack, and the swap needed zero application-code changes — both use
+  the same v2.0 event payload shape). Applied it for real and every single request came back
+  `403 AccessDeniedException`, even with a correct resource policy and `AuthType: NONE` — this
+  AWS account is under Control Tower governance (confirmed via the `aws-controltower-*` SNS topic
+  and the authority-VPC-only check in `deploy.sh`), which blocks public/unauthenticated Function
+  URLs at the SCP level, above IAM. API Gateway isn't subject to that guardrail in this account
+  (verified — TraceX's own `config-api` responds fine). **Reverted back to API Gateway.** Worth
+  remembering for any future infra choices in this specific AWS account.
+- That revert surfaced a second, unrelated, pre-existing bug: all 4 services `require("../../shared/
+  ...")`, but the Lambda zips only ever packaged each service's own folder — `shared/` was never
+  included. Every invocation crashed with `Cannot find module '../../shared/tracing'`. This was
+  never caught before because the Function-URL 403s were failing before the Lambda ever ran.
+  Fixed by staging `services/<name>/` + `shared/` together per service before zipping and pointing
+  the handler at the nested path — no application code changed. Verified live: `POST /orders`
+  returns a real confirmed order end to end.
 - **Grafana dropped in favor of Datadog** for the second observability source — Datadog already
   has a working collector on this side (`lambda-agent/src/collectors/datadog.js`); Grafana would
   have needed a new collector plus a CloudWatch→Loki forwarder built from scratch, and a Grafana
