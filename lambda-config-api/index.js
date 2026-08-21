@@ -41,7 +41,7 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const CONNECTOR_TYPES = new Set(["github", "slack", "datadog"]);
+const CONNECTOR_TYPES = new Set(["cloudwatch", "github", "slack", "datadog"]);
 const SECRET_FIELDS = new Set(["token", "apiKey", "appKey"]);
 
 exports.handler = async (event) => {
@@ -95,9 +95,11 @@ async function putConnector(body) {
     return respond(400, { error: "tenantId, a supported connector type, and config are required" });
   }
 
-  const secretName = secretNameFor(tenantId, type);
+  // CloudWatch authenticates with the Lambda execution role and therefore has
+  // no customer secret. External connectors keep their credentials in Secrets Manager.
+  const secretName = type === "cloudwatch" ? null : secretNameFor(tenantId, type);
   const { secrets, metadata } = splitConfig(config);
-  const existing = await readSecret(secretName);
+  const existing = secretName ? await readSecret(secretName) : {};
   const mergedSecrets = { ...existing, ...secrets };
 
   if ((type === "github" || type === "slack") && !mergedSecrets.token) {
@@ -127,7 +129,12 @@ async function putConnector(body) {
       Item: {
         tenantId,
         sk: `CONNECTOR#${type}`,
-        config: { ...metadata, secretRef: secretName, configured: true },
+        config: {
+          ...metadata,
+          ...(secretName ? { secretRef: secretName } : {}),
+          configured: true,
+          authMode: type === "cloudwatch" ? "lambda-iam-role" : "secret",
+        },
         updatedAt: new Date().toISOString(),
       },
     })
@@ -141,7 +148,9 @@ async function testConnector(body) {
     return respond(400, { error: "tenantId and a supported connector type are required" });
   }
   const { secrets } = splitConfig(config);
-  const credentials = { ...(await readSecret(secretNameFor(tenantId, type))), ...secrets };
+  const credentials = type === "cloudwatch"
+    ? {}
+    : { ...(await readSecret(secretNameFor(tenantId, type))), ...secrets };
   const started = Date.now();
   try {
     const details = await validateConnector(type, credentials, config);
@@ -152,9 +161,20 @@ async function testConnector(body) {
 }
 
 function validateConnector(type, credentials, config) {
+  if (type === "cloudwatch") return testCloudWatch(config);
   if (type === "github") return testGithub(credentials.token, config);
   if (type === "slack") return testSlack(credentials.token, config);
   return testDatadog(credentials, config);
+}
+
+async function testCloudWatch(config) {
+  const region = String(config.region || process.env.AWS_REGION || "us-east-1").trim();
+  if (!/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(region)) throw new Error("Enter a valid AWS region, for example us-east-1");
+  return {
+    region,
+    authMode: "lambda-iam-role",
+    permissionsManagedBy: "presidio-sre-agent-role",
+  };
 }
 
 async function testGithub(token, config) {
@@ -222,10 +242,12 @@ function safeProviderError(error) {
 
 async function deleteConnector(tenantId, type) {
   if (!tenantId) return respond(400, { error: "tenantId is required" });
-  try {
-    await sm.send(new DeleteSecretCommand({ SecretId: secretNameFor(tenantId, type), ForceDeleteWithoutRecovery: true }));
-  } catch (error) {
-    if (error.name !== "ResourceNotFoundException") throw error;
+  if (type !== "cloudwatch") {
+    try {
+      await sm.send(new DeleteSecretCommand({ SecretId: secretNameFor(tenantId, type), ForceDeleteWithoutRecovery: true }));
+    } catch (error) {
+      if (error.name !== "ResourceNotFoundException") throw error;
+    }
   }
   return deleteItem(tenantId, `CONNECTOR#${type}`);
 }
