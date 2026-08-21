@@ -8,8 +8,13 @@ output "payment_api_url" {
 }
 
 output "config_api_url" {
-  description = "Connector config API — point console/index.html at this"
+  description = "Connector config API — the hosted console is built pointing at this automatically"
   value       = aws_apigatewayv2_api.config_api.api_endpoint
+}
+
+output "console_url" {
+  description = "🧭 The hosted connector console — open this in a browser"
+  value       = "https://${aws_cloudfront_distribution.console.domain_name}"
 }
 
 output "chaos_switch_command" {
