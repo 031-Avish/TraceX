@@ -10,7 +10,16 @@ export const CONNECTOR_CATALOG = [
     { key: "apiKey", label: "API key", type: "password", secret: true },
     { key: "appKey", label: "Application key", type: "password", secret: true },
   ] },
-  { type: "grafana", name: "Grafana", icon: "G", category: "Observability", description: "Loki logs and Prometheus metrics.", available: false },
+  // Fields are ready so this can be configured end to end as soon as the backend
+  // ships GetSecret/validate wiring for it — same pattern as Datadog above. Marked
+  // unavailable until that lands so "Test connection" doesn't quietly lie about
+  // whether it actually works.
+  { type: "grafana", name: "Grafana", icon: "G", category: "Observability", description: "Loki logs and Prometheus metrics through one Grafana instance — built for infrastructure-level investigation, not just application services.", available: false, comingSoon: "In development", fields: [
+    { key: "url", label: "Grafana base URL", placeholder: "https://your-org.grafana.net" },
+    { key: "serviceAccountToken", label: "Service account token", type: "password", secret: true },
+    { key: "lokiDatasourceUid", label: "Loki datasource UID", placeholder: "loki-prod" },
+    { key: "prometheusDatasourceUid", label: "Prometheus datasource UID", placeholder: "prometheus-prod" },
+  ] },
   { type: "newrelic", name: "New Relic", icon: "N", category: "Observability", description: "NRQL logs, telemetry, and alerts.", available: false },
   { type: "elastic", name: "Elastic", icon: "E", category: "Observability", description: "Elasticsearch logs and APM data.", available: false },
   { type: "splunk", name: "Splunk", icon: "S", category: "Observability", description: "Search and correlate Splunk events.", available: false },
