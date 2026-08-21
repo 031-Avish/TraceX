@@ -3,11 +3,16 @@
 // This is what the judges see — it needs to look production-grade.
 
 const { WebClient } = require("@slack/web-api");
+const { sanitize } = require("../utils/sanitizer");
 
 class SlackNotifier {
-  constructor() {
-    this.client = new WebClient(process.env.SLACK_BOT_TOKEN);
-    this.channelId = process.env.SLACK_CHANNEL_ID;
+  /**
+   * @param {object} [config] Per-tenant override. Falls back to env vars when
+   * not provided — keeps the single-tenant demo path working unmodified.
+   */
+  constructor(config = {}) {
+    this.client = new WebClient(config.token || process.env.SLACK_BOT_TOKEN);
+    this.channelId = config.channelId || process.env.SLACK_CHANNEL_ID;
   }
 
   /**
@@ -19,6 +24,17 @@ class SlackNotifier {
     const sevEmoji = severity === "P1" ? "🔴" : severity === "P2" ? "🟡" : "🟢";
     const confBar = this._confidenceBar(confidence);
     const totalTime = triageResult.triageTimeSec || "N/A";
+    const investigationPath = triageResult.investigationPath || [];
+
+    // Last line of defense, not the first: every tool result was already
+    // sanitized before it reached the model (see agent-loop.js), so this is
+    // a backstop in case anything slipped through generation — not the
+    // primary control. Slack is a more exposed surface than the LLM call
+    // (searchable, exportable, seen by more people), so it gets its own pass.
+    const rootCause = sanitize(triageResult.rootCause);
+    const timeline = sanitize(triageResult.timeline);
+    const financialImpact = sanitize(triageResult.financialImpact);
+    const remediation = sanitize(triageResult.remediation);
 
     const blocks = [
       // ── Header ──
@@ -55,12 +71,26 @@ class SlackNotifier {
       },
       { type: "divider" },
 
+      // ── Investigation Path (proof the agent chose its own tools) ──
+      {
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: investigationPath.length
+              ? `🧭 *Agent's investigation path:*  ${investigationPath.map((t) => `\`${t}\``).join("  →  ")}  →  \`submit_triage_brief\``
+              : `🧭 *Agent's investigation path:*  \`submit_triage_brief\` _(concluded without needing additional tools)_`,
+          },
+        ],
+      },
+      { type: "divider" },
+
       // ── Root Cause Analysis ──
       {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*🔍 Root Cause Analysis*  ${confBar}  *${confidence}% confidence*\n\n${triageResult.rootCause}`,
+          text: `*🔍 Root Cause Analysis*  ${confBar}  *${confidence}% confidence*\n\n${rootCause}`,
         },
       },
 
@@ -69,7 +99,7 @@ class SlackNotifier {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*📊 Incident Timeline*\n\n${triageResult.timeline}`,
+          text: `*📊 Incident Timeline*\n\n${timeline}`,
         },
       },
       { type: "divider" },
@@ -79,7 +109,7 @@ class SlackNotifier {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*💰 Financial Impact*\n\n${triageResult.financialImpact}`,
+          text: `*💰 Financial Impact*\n\n${financialImpact}`,
         },
       },
       { type: "divider" },
@@ -89,7 +119,7 @@ class SlackNotifier {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*🛠️ Recommended Remediation*\n\n${triageResult.remediation}`,
+          text: `*🛠️ Recommended Remediation*\n\n${remediation}`,
         },
       },
 
@@ -134,7 +164,7 @@ class SlackNotifier {
         elements: [
           {
             type: "mrkdwn",
-            text: `⏱️ *Pipeline:*  Data collection: ${timings.collectionSec || "—"}s  │  LLM analysis: ${triageResult.analysisTimeSec || "—"}s  │  Total: *${totalTime}s*  │  Cost: *${triageResult.estimatedCost || "~$0.03"}*`,
+            text: `⏱️ *Pipeline:*  Investigation turns: ${triageResult.turnsUsed ?? "—"}  │  Total: *${totalTime}s*  │  Tokens: ${triageResult.tokenUsage?.input || 0} in / ${triageResult.tokenUsage?.output || 0} out  │  Cost: *${triageResult.estimatedCost || "~$0.03"}*`,
           },
         ],
       },
