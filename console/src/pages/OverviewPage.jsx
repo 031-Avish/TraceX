@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useConfig } from "../context/ConfigContext.jsx";
 import { listConnectors, listApplications } from "../api.js";
 
-const CONNECTOR_TYPES = ["datadog", "github", "slack"];
+const CONNECTOR_TYPES = ["cloudwatch", "datadog", "github", "slack"];
 
 export default function OverviewPage() {
   const { apiUrl, tenantId } = useConfig();

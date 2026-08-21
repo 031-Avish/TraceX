@@ -99,6 +99,16 @@ worth re-reading the code rather than trusting the earlier claim.
   Edit — not just re-add — plus Add/Cancel), Settings (API URL + tenant ID, persisted to
   localStorage). `deploy.sh`'s printed instructions updated to match (`npm run dev` instead of
   "open index.html").
+- [x] **UI workflow fix — CloudWatch moved to Integrations**: CloudWatch was previously selected
+  via a per-app "Observability provider" dropdown in the Applications page, which made it look like
+  an application-level choice rather than a first-class integration. Fixed across three files:
+  `console/src/connectors.js` — `cloudwatch` added as the first entry in the Observability category
+  with a `region` field (no credentials — IAM-based); `console/src/pages/ApplicationsPage.jsx` —
+  removed `observabilityProvider` dropdown entirely, restructured the form into labelled scope
+  sections (CloudWatch scope, Datadog scope, per-app overrides) so the app form configures *which*
+  resources within a connected integration, not *which* provider to use;
+  `console/src/pages/OverviewPage.jsx` — `cloudwatch` added to the connector status summary so
+  its connected state is visible on the Overview. Build verified clean (`npm run build`).
 
 ## Phase 2.6 — PII sanitization gap (found by asking "are we actually removing PII?")
 

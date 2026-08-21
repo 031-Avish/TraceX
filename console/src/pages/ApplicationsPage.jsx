@@ -5,19 +5,21 @@ import { listApplications, saveApplication, deleteApplication } from "../api.js"
 
 const EMPTY_FORM = {
   appId: "",
+  environment: "production",
+  // CloudWatch scope — which log group / alarm / namespace belongs to this app
   alarmName: "",
   logGroupName: "",
   metricNamespace: "",
+  // Datadog scope — optional; only used when the Datadog connector is active
+  serviceName: "",
+  monitorId: "",
+  metricQuery: "",
+  errorQuery: "",
+  deploymentQuery: "",
+  // Per-app connector overrides (fall back to the connector's default when blank)
   githubRepoOwner: "",
   githubRepoName: "",
   slackChannelId: "",
-  observabilityProvider: "cloudwatch",
-  serviceName: "",
-  environment: "production",
-  errorQuery: "",
-  deploymentQuery: "",
-  metricQuery: "",
-  monitorId: "",
 };
 
 export default function ApplicationsPage() {
@@ -99,7 +101,7 @@ export default function ApplicationsPage() {
             <div>
               <div className="app-id">{app.appId}</div>
               <div className="meta">
-                {app.config.observabilityProvider || "cloudwatch"} · {app.config.serviceName || app.config.logGroupName || "—"} · alert: {app.config.monitorId || app.config.alarmName || "—"}
+                {app.config.logGroupName || app.config.serviceName || "—"} · alarm: {app.config.alarmName || app.config.monitorId || "—"} · env: {app.config.environment || "production"}
               </div>
             </div>
             <div className="app-actions">
@@ -117,6 +119,7 @@ export default function ApplicationsPage() {
       <form className="app-form" onSubmit={save}>
         <h3 className="full form-title">{editingId ? `Editing "${editingId}"` : "Add application"}</h3>
 
+        {/* ── Identity ──────────────────────────────────────────────────── */}
         <div className="field">
           <label>App ID (matches alarm's service name)</label>
           <input
@@ -127,17 +130,14 @@ export default function ApplicationsPage() {
           />
         </div>
         <div className="field">
-          <label>Observability provider</label>
-          <select value={form.observabilityProvider} onChange={(e) => updateField("observabilityProvider", e.target.value)}>
-            <option value="cloudwatch">AWS CloudWatch</option>
-            <option value="datadog">Datadog</option>
-          </select>
-        </div>
-        <div className="field">
           <label>Environment</label>
           <input value={form.environment} onChange={(e) => updateField("environment", e.target.value)} placeholder="production" />
         </div>
-        {form.observabilityProvider === "cloudwatch" ? <>
+
+        {/* ── CloudWatch scope ──────────────────────────────────────────── */}
+        {/* These fields scope the CloudWatch integration to this specific   */}
+        {/* application. Connect CloudWatch under Integrations first.        */}
+        <div className="field-group-label full">CloudWatch scope</div>
         <div className="field">
           <label>Alarm name</label>
           <input
@@ -147,7 +147,7 @@ export default function ApplicationsPage() {
           />
         </div>
         <div className="field">
-          <label>CloudWatch log group</label>
+          <label>Log group</label>
           <input
             value={form.logGroupName}
             onChange={(e) => updateField("logGroupName", e.target.value)}
@@ -158,9 +158,13 @@ export default function ApplicationsPage() {
           <label>Metric namespace</label>
           <input value={form.metricNamespace} onChange={(e) => updateField("metricNamespace", e.target.value)} placeholder="AcmeApp" />
         </div>
-        </> : <>
+
+        {/* ── Datadog scope (optional) ──────────────────────────────────── */}
+        {/* Only used when the Datadog connector is active. Leave blank if   */}
+        {/* your team uses CloudWatch only.                                  */}
+        <div className="field-group-label full">Datadog scope <span className="hint-inline">(optional — requires Datadog connector)</span></div>
         <div className="field">
-          <label>Datadog service tag</label>
+          <label>Service tag</label>
           <input value={form.serviceName} onChange={(e) => updateField("serviceName", e.target.value)} placeholder={form.appId || "payment-service"} />
         </div>
         <div className="field">
@@ -172,38 +176,42 @@ export default function ApplicationsPage() {
           <input value={form.metricQuery} onChange={(e) => updateField("metricQuery", e.target.value)} placeholder="sum:trace.http.request.errors{service:payment-service}.as_count()" />
         </div>
         <div className="field full">
-          <label>Error log query (optional override)</label>
+          <label>Error log query</label>
           <input value={form.errorQuery} onChange={(e) => updateField("errorQuery", e.target.value)} placeholder="service:payment-service env:production status:error" />
         </div>
         <div className="field full">
-          <label>Deployment log query (optional override)</label>
+          <label>Deployment log query</label>
           <input value={form.deploymentQuery} onChange={(e) => updateField("deploymentQuery", e.target.value)} placeholder="service:payment-service env:production deployment" />
         </div>
-        </>}
+
+        {/* ── Per-app overrides ─────────────────────────────────────────── */}
+        {/* Falls back to the connector's default when left blank.           */}
+        <div className="field-group-label full">Per-app connector overrides <span className="hint-inline">(optional — falls back to connector default)</span></div>
         <div className="field">
-          <label>GitHub repo owner (override)</label>
+          <label>GitHub repo owner</label>
           <input
             value={form.githubRepoOwner}
             onChange={(e) => updateField("githubRepoOwner", e.target.value)}
-            placeholder="optional — uses connector default"
+            placeholder="uses connector default"
           />
         </div>
         <div className="field">
-          <label>GitHub repo name (override)</label>
+          <label>GitHub repo name</label>
           <input
             value={form.githubRepoName}
             onChange={(e) => updateField("githubRepoName", e.target.value)}
-            placeholder="optional — uses connector default"
+            placeholder="uses connector default"
           />
         </div>
         <div className="field full">
-          <label>Slack channel ID (override)</label>
+          <label>Slack channel ID</label>
           <input
             value={form.slackChannelId}
             onChange={(e) => updateField("slackChannelId", e.target.value)}
-            placeholder="optional — uses connector default"
+            placeholder="uses connector default"
           />
         </div>
+
         <div className="actions">
           <button type="submit" disabled={loading}>
             {editingId ? "Save changes" : "Add application"}

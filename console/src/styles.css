@@ -305,6 +305,21 @@ button.danger {
   font-size: 12px;
   margin-top: 4px;
 }
+.hint-inline {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+.field-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--panel-border);
+  margin-top: 6px;
+}
 .error-text {
   color: var(--danger);
   font-size: 13px;
