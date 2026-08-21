@@ -85,25 +85,32 @@ async function resolveTenantConfig(tenantId, appId) {
 
     if (!app) return null;
 
-    const observabilityType = app.observabilityProvider || "cloudwatch";
-    const observabilityConnector = connectors[observabilityType];
+    // Infer the observability provider from which connector is actually connected,
+    // not from a per-app dropdown (which was removed from the UI). Priority order:
+    //   1. Datadog — if the connector exists and has credentials
+    //   2. CloudWatch — always available via the Lambda's IAM role, no credentials needed
+    // This matches the Integrations page model: the provider is determined by what
+    // the tenant connected, not by a choice made at the individual application level.
+    const datadogConnector = connectors.datadog;
+    const observabilityConnector = datadogConnector || connectors.cloudwatch || null;
     const [githubSecret, slackSecret, observabilitySecret] = await Promise.all([
       connectors.github ? getSecret(connectors.github.secretRef) : {},
       connectors.slack ? getSecret(connectors.slack.secretRef) : {},
-      observabilityConnector ? getSecret(observabilityConnector.secretRef) : {},
+      datadogConnector ? getSecret(datadogConnector.secretRef) : {},
     ]);
+
+    const datadogReady = datadogConnector && observabilitySecret.apiKey;
 
     return {
       logGroupName: app.logGroupName,
       metricNamespace: app.metricNamespace,
       alarmName: app.alarmName,
-      observability:
-        observabilityType === "datadog" && observabilityConnector && observabilitySecret.apiKey
+      observability: datadogReady
           ? {
               provider: "datadog",
               apiKey: observabilitySecret.apiKey,
               appKey: observabilitySecret.appKey,
-              site: observabilityConnector.site || "us1",
+              site: datadogConnector.site || "us1",
               service: app.serviceName || appId,
               environment: app.environment,
               errorQuery: app.errorQuery,
@@ -111,9 +118,7 @@ async function resolveTenantConfig(tenantId, appId) {
               metricQuery: app.metricQuery,
               monitorId: app.monitorId,
             }
-          : observabilityType === "cloudwatch"
-            ? { provider: "cloudwatch" }
-            : { provider: "unavailable", error: `${observabilityType} connector is missing or has incomplete credentials` },
+          : { provider: "cloudwatch" },
       github:
         connectors.github && githubSecret.token
           ? { token: githubSecret.token, owner: app.githubRepoOwner || connectors.github.owner, repo: app.githubRepoName || connectors.github.repo }
