@@ -26,7 +26,7 @@ variable "openrouter_model" {
 
 # Backward-compatible alias: existing local tfvars that placed an OpenRouter
 # key under this old name continue to deploy. Prefer openrouter_api_key.
-variable "anthropic_api_key" {
+variable "openrouter_api_key" {
   type      = string
   sensitive = true
   default   = ""
