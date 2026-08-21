@@ -1,13 +1,23 @@
-aws_region        = "us-east-1"
-anthropic_api_key = "sk-ant-api03-XXXXXXXX"
-slack_bot_token   = "xoxb-XXXXXXXX"
-slack_channel_id  = "C0XXXXXXXXX"
+aws_region = "us-east-1"
+
+# Authority-provided network — lookup only.
+existing_vpc_name                        = "path-labs-innovation-sprint-vpc"
+existing_private_subnet_name_pattern     = "path-labs-innovation-sprint-private-*"
+
+# OpenRouter
+openrouter_api_key = "sk-or-v1-XXXXXXXXXXXXXXXX"
+openrouter_model   = "anthropic/claude-sonnet-4"
+
+# Slack
+slack_bot_token  = "xoxb-XXXXXXXX"
+slack_channel_id = "C0XXXXXXXXX"
+
+# GitHub
 github_token      = "ghp_XXXXXXXX"
 github_repo_owner = "your-username"
 github_repo_name  = "acme-payment-service"
 
-# ── Get this from: bash scripts/setup-github-repo.sh ──
-# It prints the SHA after creating the repo. Paste it here.
+# Demo incident metadata
 breaking_commit_sha    = "PASTE_SHA_HERE"
 breaking_commit_msg    = "refactor: payment service cleanup - remove legacy null checks"
 breaking_commit_author = "dev-jsmith"

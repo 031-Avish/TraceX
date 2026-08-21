@@ -20,7 +20,7 @@ resource "aws_ssm_parameter" "chaos_mode" {
   type  = "String"
   value = "false"
 
-  lifecycle { ignore_changes = [value] }  # don't reset on re-apply
+  lifecycle { ignore_changes = [value] } # don't reset on re-apply
 }
 
 # ── CloudWatch Log Group (shared by demo app) ────────────────
@@ -33,7 +33,7 @@ resource "aws_cloudwatch_log_group" "app_logs" {
 resource "aws_iam_role" "demo_app_role" {
   name = "presidio-demo-app-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
@@ -86,6 +86,11 @@ resource "aws_lambda_function" "payment_service" {
   filename         = data.archive_file.demo_app_zip.output_path
   source_code_hash = data.archive_file.demo_app_zip.output_base64sha256
 
+  vpc_config {
+    subnet_ids         = local.tracex_lambda_subnet_ids
+    security_group_ids = local.tracex_lambda_security_group_ids
+  }
+
   environment {
     variables = {
       CHAOS_PARAM_NAME       = local.chaos_param
@@ -100,7 +105,7 @@ resource "aws_lambda_function" "payment_service" {
     log_format = "Text"
   }
 
-  depends_on = [aws_cloudwatch_log_group.app_logs]
+  depends_on = [aws_cloudwatch_log_group.app_logs, aws_iam_role_policy_attachment.demo_app_vpc_access]
 }
 
 # ── API Gateway (makes it a real HTTP endpoint) ──────────────
@@ -139,7 +144,7 @@ resource "aws_lambda_permission" "apigw" {
 resource "aws_iam_role" "traffic_gen_role" {
   name = "presidio-traffic-gen-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
@@ -174,11 +179,18 @@ resource "aws_lambda_function" "traffic_gen" {
   filename         = data.archive_file.traffic_gen_zip.output_path
   source_code_hash = data.archive_file.traffic_gen_zip.output_base64sha256
 
+  vpc_config {
+    subnet_ids         = local.tracex_lambda_subnet_ids
+    security_group_ids = local.tracex_lambda_security_group_ids
+  }
+
   environment {
     variables = {
       PAYMENT_API_URL = "${aws_apigatewayv2_api.payment_api.api_endpoint}/api/payments"
     }
   }
+
+  depends_on = [aws_iam_role_policy_attachment.traffic_gen_vpc_access]
 }
 
 # Schedule: every 1 minute

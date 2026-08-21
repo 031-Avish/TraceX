@@ -2,6 +2,10 @@
 #  TRIAGE AGENT — The AI SRE that analyzes incidents
 # ═══════════════════════════════════════════════════════════════
 
+locals {
+  effective_openrouter_api_key = var.openrouter_api_key != "" ? var.openrouter_api_key : var.openrouter_api_key
+}
+
 # ── SNS Topic (alarm → agent trigger) ────────────────────────
 resource "aws_sns_topic" "incident_alarms" {
   name         = "presidio-incident-alarms"
@@ -25,7 +29,7 @@ resource "aws_lambda_permission" "sns_invoke" {
 resource "aws_iam_role" "agent_role" {
   name = "presidio-sre-agent-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" } }]
   })
 }
@@ -37,21 +41,21 @@ resource "aws_iam_role_policy" "agent_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "ReadAppLogs"
-        Effect = "Allow"
-        Action = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
+        Sid      = "ReadAppLogs"
+        Effect   = "Allow"
+        Action   = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogGroups", "logs:DescribeLogStreams"]
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:${local.log_group_name}:*"
       },
       {
-        Sid    = "WriteOwnLogs"
-        Effect = "Allow"
-        Action = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Sid      = "WriteOwnLogs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/presidio-sre-agent-triage:*"
       },
       {
-        Sid    = "ReadMetrics"
-        Effect = "Allow"
-        Action = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms"]
+        Sid      = "ReadMetrics"
+        Effect   = "Allow"
+        Action   = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms"]
         Resource = "*"
       }
     ]
@@ -92,18 +96,37 @@ resource "aws_lambda_function" "triage_agent" {
   filename         = data.archive_file.agent_zip.output_path
   source_code_hash = data.archive_file.agent_zip.output_base64sha256
 
+  vpc_config {
+    subnet_ids         = local.tracex_lambda_subnet_ids
+    security_group_ids = local.tracex_lambda_security_group_ids
+  }
+
   environment {
     variables = {
-      ANTHROPIC_API_KEY  = var.anthropic_api_key
-      SLACK_BOT_TOKEN    = var.slack_bot_token
-      SLACK_CHANNEL_ID   = var.slack_channel_id
-      GITHUB_TOKEN       = var.github_token
-      GITHUB_REPO_OWNER  = var.github_repo_owner
-      GITHUB_REPO_NAME   = var.github_repo_name
-      LOG_GROUP_NAME     = local.log_group_name
-      METRIC_NAMESPACE   = local.metric_namespace
+      OPENROUTER_API_KEY   = local.effective_openrouter_api_key
+      OPENROUTER_MODEL     = var.openrouter_model
+      SLACK_BOT_TOKEN      = var.slack_bot_token
+      SLACK_CHANNEL_ID     = var.slack_channel_id
+      GITHUB_TOKEN         = var.github_token
+      GITHUB_REPO_OWNER    = var.github_repo_owner
+      GITHUB_REPO_NAME     = var.github_repo_name
+      LOG_GROUP_NAME       = local.log_group_name
+      METRIC_NAMESPACE     = local.metric_namespace
+      CONNECTOR_TABLE_NAME = aws_dynamodb_table.connector_registry.name
+      TENANT_ID            = "demo"
     }
   }
 
-  depends_on = [aws_iam_role_policy.agent_policy, aws_cloudwatch_log_group.agent_logs]
+  lifecycle {
+    precondition {
+      condition     = local.effective_openrouter_api_key != ""
+      error_message = "Set openrouter_api_key in terraform.tfvars (openrouter_api_key is accepted only as a deprecated compatibility alias)."
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy.agent_policy,
+    aws_cloudwatch_log_group.agent_logs,
+    aws_iam_role_policy_attachment.agent_vpc_access,
+  ]
 }
