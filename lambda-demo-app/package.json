@@ -1,0 +1,7 @@
+{
+  "name": "presidio-demo-payment-service",
+  "version": "1.0.0",
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.700.0"
+  }
+}
