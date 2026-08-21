@@ -2,6 +2,10 @@
 #  TRIAGE AGENT — The AI SRE that analyzes incidents
 # ═══════════════════════════════════════════════════════════════
 
+locals {
+  effective_openrouter_api_key = var.openrouter_api_key != "" ? var.openrouter_api_key : var.anthropic_api_key
+}
+
 # ── SNS Topic (alarm → agent trigger) ────────────────────────
 resource "aws_sns_topic" "incident_alarms" {
   name         = "presidio-incident-alarms"
@@ -99,16 +103,24 @@ resource "aws_lambda_function" "triage_agent" {
 
   environment {
     variables = {
-      ANTHROPIC_API_KEY        = var.anthropic_api_key
-      SLACK_BOT_TOKEN          = var.slack_bot_token
-      SLACK_CHANNEL_ID         = var.slack_channel_id
-      GITHUB_TOKEN             = var.github_token
-      GITHUB_REPO_OWNER        = var.github_repo_owner
-      GITHUB_REPO_NAME         = var.github_repo_name
-      LOG_GROUP_NAME           = local.log_group_name
-      METRIC_NAMESPACE         = local.metric_namespace
-      CONNECTOR_TABLE_NAME     = aws_dynamodb_table.connector_registry.name
-      TENANT_ID                = "demo"
+      OPENROUTER_API_KEY   = local.effective_openrouter_api_key
+      OPENROUTER_MODEL     = var.openrouter_model
+      SLACK_BOT_TOKEN      = var.slack_bot_token
+      SLACK_CHANNEL_ID     = var.slack_channel_id
+      GITHUB_TOKEN         = var.github_token
+      GITHUB_REPO_OWNER    = var.github_repo_owner
+      GITHUB_REPO_NAME     = var.github_repo_name
+      LOG_GROUP_NAME       = local.log_group_name
+      METRIC_NAMESPACE     = local.metric_namespace
+      CONNECTOR_TABLE_NAME = aws_dynamodb_table.connector_registry.name
+      TENANT_ID            = "demo"
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.effective_openrouter_api_key != ""
+      error_message = "Set openrouter_api_key in terraform.tfvars (anthropic_api_key is accepted only as a deprecated compatibility alias)."
     }
   }
 

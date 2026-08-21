@@ -1,11 +1,11 @@
 // src/engine/agent-loop.js
 // The agent: given an incident, decides which tools to call and when it has
-// enough evidence to conclude. Uses Anthropic Claude's native tool calling.
+// enough evidence to conclude. Uses OpenRouter's OpenAI-compatible tool calling.
 //
 // Loop shape (ReAct-style):
-//   1. Send the incident + available tools to Claude
-//   2. Claude returns tool_use blocks (investigate more) or calls submit_triage_brief (done)
-//   3. Execute requested tools, sanitize + truncate results, feed back as tool_result
+//   1. Send the incident + available tools to OpenRouter
+//   2. The selected model returns function calls or calls submit_triage_brief
+//   3. Execute requested tools, sanitize + truncate results, feed back as tool messages
 //   4. Repeat, bounded by MAX_TURNS and a wall-clock budget
 
 const { sanitize } = require("../utils/sanitizer");
@@ -29,7 +29,6 @@ class AgentLoop {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
 
-    // Anthropic format: system prompt is separate, messages start with user
     const systemPrompt = this._systemPrompt();
     const messages = [
       { role: "user", content: this._incidentSummary(alarmData) },
@@ -52,9 +51,7 @@ class AgentLoop {
       totalInputTokens += response.usage.inputTokens;
       totalOutputTokens += response.usage.outputTokens;
 
-      // Push assistant response into conversation history
-      // Anthropic expects: { role: "assistant", content: [...blocks...] }
-      messages.push({ role: "assistant", content: response.rawContent });
+      messages.push(response.assistantMessage);
 
       if (!response.toolCalls.length) {
         // Model answered in plain text without calling any tool.
@@ -68,8 +65,7 @@ class AgentLoop {
       }
 
       // Process each tool call
-      // In Anthropic format, tool results go as a user message with tool_result content blocks
-      const toolResultBlocks = [];
+      const toolResultMessages = [];
 
       for (const toolCall of response.toolCalls) {
         const name = toolCall.function.name;
@@ -109,18 +105,14 @@ class AgentLoop {
           }
         }
 
-        // Anthropic tool_result format
-        toolResultBlocks.push({
-          type: "tool_result",
-          tool_use_id: toolCall.id,
+        toolResultMessages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
           content: resultContent,
         });
       }
 
-      // Push all tool results as a single user message (Anthropic format)
-      if (toolResultBlocks.length > 0) {
-        messages.push({ role: "user", content: toolResultBlocks });
-      }
+      messages.push(...toolResultMessages);
     }
 
     this.log.warn(`Agent hit MAX_TURNS (${MAX_TURNS}) without calling submit_triage_brief`);

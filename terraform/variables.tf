@@ -12,10 +12,24 @@ variable "existing_private_subnet_name_pattern" {
   default = "path-labs-innovation-sprint-private-*"
 }
 
-# ── Anthropic Claude ──
+# ── OpenRouter ──
+variable "openrouter_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
+variable "openrouter_model" {
+  type    = string
+  default = "anthropic/claude-sonnet-4"
+}
+
+# Backward-compatible alias: existing local tfvars that placed an OpenRouter
+# key under this old name continue to deploy. Prefer openrouter_api_key.
 variable "anthropic_api_key" {
   type      = string
   sensitive = true
+  default   = ""
 }
 
 variable "slack_bot_token" {

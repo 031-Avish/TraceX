@@ -1,7 +1,7 @@
 # TraceX — Agentic Rebuild Plan
 
 Working plan for turning the current fixed-pipeline demo into an actual agent, on top of
-Azure OpenAI (Azure AI Foundry), scoped for a 22-hour hackathon submission.
+OpenRouter, scoped for a 22-hour hackathon submission.
 
 Update this file's checkboxes as sections land — it's the running log of what's actually
 been built vs. still planned, so anyone picking up the repo mid-build knows the state.
@@ -21,7 +21,7 @@ been built vs. still planned, so anyone picking up the repo mid-build knows the 
   incident doesn't hold up under either — and doesn't scale to "whatever the customer
   connected" anyway. The agent has to decide which tools exist for this tenant and which
   ones this incident actually calls for.
-- **Model**: Azure AI Foundry / Azure OpenAI, not Claude. Built as a swappable client so
+- **Model gateway**: OpenRouter with a configurable tool-capable model. Built as a swappable client so
   switching models later is a one-file change.
 
 ## Phase 1 — Fixed pipeline → real tool-calling agent
@@ -30,17 +30,17 @@ Scope: single demo tenant (still the acme-payment-service setup), but the *decis
 becomes real — the model chooses which tools to call and when it has enough evidence,
 instead of the code always fetching all six data sources.
 
-- [x] `lambda-agent/package.json` — drop `@anthropic-ai/sdk`, add `openai` (Azure-capable SDK) + `dotenv`
-- [x] `lambda-agent/src/engine/llm-client.js` — Azure OpenAI chat-completions wrapper (tools, usage tracking, cost estimate). This is the *only* file that knows about Azure — swapping providers later touches only this file.
+- [x] `lambda-agent/package.json` — use the `openai` SDK against OpenRouter's compatible endpoint + `dotenv`
+- [x] `lambda-agent/src/engine/llm-client.js` — OpenRouter chat-completions wrapper (tools, usage tracking, cost estimate). This is the provider boundary.
 - [x] `lambda-agent/src/engine/tools.js` — wraps the existing collectors (`cloudwatch-logs`, `cloudwatch-metrics`, `github-commits`) as JSON-schema tool definitions the model can choose to call, plus a terminal `submit_triage_brief` tool that forces structured output (replaces the old regex-based `_extractSection` parsing entirely). Also added `get_commit_diff` so the agent can drill into a specific commit's code change, not just the message.
 - [x] `lambda-agent/src/engine/agent-loop.js` — the actual ReAct-style loop: call model → model picks tool(s) or finalizes → execute → truncate/sanitize result → feed back → repeat, bounded by `AGENT_MAX_TURNS` (default 6) and a wall-clock budget (`AGENT_WALL_CLOCK_BUDGET_MS`, default 65s — Lambda has 90s total). Falls back to a "manual review needed" brief instead of erroring if the budget/turns run out or the model never calls a tool.
 - [x] `lambda-agent/src/handler.js` — replaced the fixed `Promise.all` fan-out with the agent loop
 - [x] `lambda-agent/src/engine/triage-engine.js` — removed (superseded by `llm-client.js` + `agent-loop.js`)
 - [x] `lambda-agent/src/slack/slack-notifier.js` — added an "Investigation Path" block showing which tools the agent actually chose to call, in order (e.g. `get_deployment_logs → get_error_logs → get_commit_diff → submit_triage_brief`) — this is the visible proof-of-agency for the demo/judges. Also updated the "Pipeline" footer line since the old collection-vs-analysis timing split no longer applies (turns are interleaved now).
-- [x] `terraform/agent.tf`, `terraform/variables.tf`, `terraform/terraform.tfvars.example` — swapped `anthropic_api_key` for Azure OpenAI vars (`azure_openai_endpoint`, `azure_openai_api_key`, `azure_openai_deployment`, `azure_openai_api_version`). Also fixed pre-existing invalid HCL (semicolon-separated single-line blocks) in `variables.tf` that `terraform validate` would have choked on.
+- [x] `terraform/agent.tf`, `terraform/variables.tf`, `terraform/terraform.tfvars.example` — configure the OpenRouter key and model, with a deprecated alias for existing local configuration.
 - [x] `lambda-agent/.env.example` — local dev env template (never committed — `.gitignore` already excludes `.env`)
 - [x] `lambda-agent/test/test-agent-local.js` — local harness to run the full agent loop against real AWS/GitHub/Slack without deploying, using a mock SNS event
-- [ ] Run a real local test once Azure credentials are available (`node test/test-agent-local.js`), confirm `tool_calls` come back correctly for the actual deployment — **this is the one thing I can't verify myself**, needs real Azure/AWS/Slack credentials
+- [ ] Run a real local test once OpenRouter/AWS/Slack credentials are available (`node test/test-agent-local.js`) and confirm tool calls for the selected model
 
 All Phase 1 files pass `node --check` and `terraform validate` (syntax-level — `validate` itself needs `terraform init` for providers, not run here since it's a network op).
 
@@ -131,7 +131,7 @@ model, in `agent-loop.js`. Two real gaps followed from that:
 - [x] Update `README.md` — rewritten end to end: corrected architecture diagram (was still showing
   Claude + the old fixed pipeline), GTM framing up top (customer-configured, not Presidio-internal —
   matches the eligibility reasoning from the top of this file), a full Security & Governance
-  section, updated Quick Start (Azure OpenAI vars + console setup step), updated demo script and
+  section, updated Quick Start (OpenRouter vars + console setup step), updated demo script and
   project structure to include `lambda-config-api/`, `console/`, and the new `engine/`/`config/`
   files.
 - [ ] Record demo video

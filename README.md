@@ -36,7 +36,7 @@ configure does.
 │                                                                                        │
 │  Agent Lambda                                                                         │
 │    1. Looks up this tenant/app's connector config (DynamoDB + Secrets Manager)        │
-│    2. Hands the incident to Azure OpenAI with ONLY the tools this tenant configured    │
+│    2. Hands the incident to OpenRouter with ONLY the tools this tenant configured      │
 │    3. Model decides which tools to call, in what order, and when it has enough        │
 │       evidence — get_error_logs, get_deployment_logs, get_service_metrics,            │
 │       get_alarm_details, get_recent_commits, get_commit_diff                          │
@@ -110,7 +110,7 @@ found and fixed while stress-testing the earlier claims — is in [`PLAN.md`](./
 ## Quick Start
 
 ```bash
-# 1. Fill in your API keys (Azure OpenAI, Slack, GitHub)
+# 1. Fill in your API keys (OpenRouter, Slack, GitHub)
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 # edit terraform/terraform.tfvars — see that file for what each field needs
 
@@ -164,7 +164,7 @@ table, NAT gateway, or internet gateway. `terraform destroy` therefore cannot de
 authority-owned network.
 
 The existing private subnets must retain outbound connectivity through the authority-managed NAT
-gateway because the agent and configuration API call Anthropic, GitHub, Slack, and Datadog.
+gateway because the agent and configuration API call OpenRouter, GitHub, Slack, and Datadog.
 TraceX creates only an outbound-only workload security group inside the supplied VPC.
 
 If you skip step 3, the agent falls back to the original env-var-driven single-tenant demo
@@ -236,7 +236,7 @@ SSM Parameter: /presidio-demo/chaos-mode
 
 ## Pre-Hackathon Checklist
 
-- [ ] Azure AI Foundry deployment (endpoint, API key, deployment name — must support tool/function calling)
+- [ ] OpenRouter API key and a model that supports tool/function calling
 - [ ] Slack app with `chat:write` scope, bot token, channel ID
 - [ ] GitHub PAT + demo repo (`bash scripts/setup-github-repo.sh`)
 - [ ] Terraform installed
@@ -264,7 +264,7 @@ presidio-fullstack/
 │       ├── handler.js           # Entry point — resolves tenant config, runs the agent loop
 │       ├── collectors/          # CloudWatch Logs/Metrics, GitHub — the raw data sources
 │       ├── engine/
-│       │   ├── llm-client.js    # Azure OpenAI wrapper — the only file that knows about Azure
+│       │   ├── llm-client.js    # OpenRouter wrapper — provider-specific boundary
 │       │   ├── tools.js         # Wraps collectors as tool schemas, gated by what's configured
 │       │   └── agent-loop.js    # The actual agent: tool-calling loop, truncation, sanitization
 │       ├── config/
