@@ -24,14 +24,6 @@ variable "openrouter_model" {
   default = "anthropic/claude-sonnet-4"
 }
 
-# Backward-compatible alias: existing local tfvars that placed an OpenRouter
-# key under this old name continue to deploy. Prefer openrouter_api_key.
-variable "openrouter_api_key" {
-  type      = string
-  sensitive = true
-  default   = ""
-}
-
 variable "slack_bot_token" {
   type      = string
   sensitive = true
