@@ -178,3 +178,35 @@ Defense-in-depth context (no single layer is sufficient on its own):
 - [ ] Record demo video
 - [ ] Final pass: confirm no secrets anywhere in the repo before the push (submission stays on
   GitHub per the user's call — GitLab migration deferred to later, not blocking)
+
+## Phase 4 — ShopCo demo environment (separate repo)
+
+A realistic multi-service "client" environment for TraceX to investigate, built in a separate
+repo (`github.com/031-Avish/shopco-platform`) per `CLIENT_ENV_PLAN.md`. Kept fully separate from
+this repo deliberately — it's meant to look like a real customer's own engineering repo, not
+TraceX's own code, so it can't reference this repo, this plan, or anything demo-specific without
+undermining the whole point of the exercise.
+
+- 4 services (order/payment/inventory/notification), real inter-service HTTP calls, traceId
+  propagation, structured logging — all real, working code
+- 24-commit history spanning ~30 days, infra and application commits interleaved by date (not
+  infra as one commit at the end) — no branches/PRs, since the agent's `get_commit_diff`/
+  `get_recent_commits` tools only read `git log`, blind to whether history came through a PR
+- The "bad commit" is real, tagged `v2.4.1-hotfix`, diff verified with `git show --stat` after
+  every rewrite: removes a null-safety check in `payment-service`, replaced with unsafe
+  `currency.toUpperCase()`/`amount.toFixed()` calls that throw a real `TypeError` on null input
+- All 3 chaos scenarios (payment outage, inventory exhaustion, cascading order+payment failure)
+  are actually wired to SSM parameters in the application code, not just present in the plan doc
+- Terraform: one Lambda + API Gateway per service, IAM scoped per-service, alarms wired to
+  *this* repo's real SNS topic (the one hard dependency between the two stacks) — verified with
+  a real `terraform plan` against live AWS credentials, 59 to add, 0 errors. Not yet `apply`'d.
+- **Grafana dropped in favor of Datadog** for the second observability source — Datadog already
+  has a working collector on this side (`lambda-agent/src/collectors/datadog.js`); Grafana would
+  have needed a new collector plus a CloudWatch→Loki forwarder built from scratch, and a Grafana
+  Cloud account that needs manual signup either way.
+- Caught and scrubbed several places where the ShopCo repo's own comments/CI-workflow leaked
+  that it was a staged demo (e.g. a CI file literally saying "not a real workflow, part of the
+  ShopCo narrative") — worth double-checking any future additions there for the same thing, since
+  the whole value of that repo is looking like a real, independent customer environment.
+- Not yet done: Datadog account signup (manual, not automatable), registering the 4 apps in this
+  repo's console, the `break-*.sh`/`heal-all.sh` scripts, actually deploying either stack for real.
