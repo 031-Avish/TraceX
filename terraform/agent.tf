@@ -55,7 +55,7 @@ resource "aws_iam_role_policy" "agent_policy" {
       {
         Sid      = "ReadMetrics"
         Effect   = "Allow"
-        Action   = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms"]
+        Action   = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"]
         Resource = "*"
       }
     ]

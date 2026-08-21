@@ -12,6 +12,7 @@
 
 try { require("dotenv").config(); } catch {}
 
+const { CloudWatchClient, DescribeAlarmsCommand, ListTagsForResourceCommand } = require("@aws-sdk/client-cloudwatch");
 const { LLMClient } = require("./engine/llm-client");
 const { buildTools } = require("./engine/tools");
 const { AgentLoop } = require("./engine/agent-loop");
@@ -19,12 +20,39 @@ const { SlackNotifier } = require("./slack/slack-notifier");
 const { Logger } = require("./utils/logger");
 const { resolveTenantConfig } = require("./config/connector-registry");
 
+let cwClient = null;
+function getCWClient(region) {
+  if (!cwClient) cwClient = new CloudWatchClient({ region: region || process.env.AWS_REGION || "us-east-1" });
+  return cwClient;
+}
+
+/**
+ * Fetches alarm tags from CloudWatch via DescribeAlarms + ListTagsForResource.
+ * Returns a plain object of tag key→value, or {} on any failure.
+ * Called once per invocation — result is tiny and not worth caching across invocations.
+ */
+async function fetchAlarmTags(alarmName, region) {
+  try {
+    const cw = getCWClient(region);
+    const describeResult = await cw.send(new DescribeAlarmsCommand({ AlarmNames: [alarmName], AlarmTypes: ["MetricAlarm"] }));
+    const alarm = describeResult.MetricAlarms?.[0];
+    if (!alarm?.AlarmArn) return {};
+    const tagsResult = await cw.send(new ListTagsForResourceCommand({ ResourceARN: alarm.AlarmArn }));
+    const tags = {};
+    for (const { Key, Value } of tagsResult.Tags || []) tags[Key] = Value;
+    return tags;
+  } catch (e) {
+    // Non-fatal: fall through to defaults
+    return {};
+  }
+}
+
 module.exports.main = async (event) => {
   const log = new Logger("TRIAGE");
 
   log.banner("PRESIDIO SRE TRIAGE AGENT — ACTIVATED");
 
-  const alarmData = parseAlarmEvent(event);
+  const alarmData = await parseAlarmEvent(event);
   log.info(`Alarm: ${alarmData.alarmName}`);
   log.info(`Client: ${alarmData.client} | Service: ${alarmData.service} | Env: ${alarmData.environment}`);
 
@@ -100,39 +128,59 @@ module.exports.main = async (event) => {
 };
 
 // ─── SNS Event Parser ────────────────────────────────────────
+// Tags expected on every aws_cloudwatch_metric_alarm resource:
+//   Client      → human-readable tenant/org name  (e.g. "ShopCo")
+//   Service     → logical service name            (e.g. "order-service")
+//   Environment → deployment tier                 (e.g. "production", "staging")
+// Any tag that is absent falls back to the value extracted from the SNS message
+// structure or, finally, to a safe "unknown" placeholder so the rest of the
+// pipeline never sees undefined.
 
-function parseAlarmEvent(event) {
-  // Try to parse as SNS event (from CloudWatch Alarm → SNS → Lambda)
+async function parseAlarmEvent(event) {
+  // ── SNS trigger (CloudWatch Alarm → SNS → Lambda) ──────────
   try {
     const snsRecord = event.Records?.[0]?.Sns;
     if (snsRecord) {
       const message = JSON.parse(snsRecord.Message);
+      const alarmName = message.AlarmName || "unknown-alarm";
+      const region = message.Region || process.env.AWS_REGION || "us-east-1";
+
+      // Alarm tags are the authoritative source of identity. Fetched once via
+      // DescribeAlarms → ListTagsForResource. Falls back gracefully if the call
+      // fails (no IAM permission, throttle, etc.).
+      const tags = await fetchAlarmTags(alarmName, region);
+
+      // Secondary fallback: some setups embed service info in Trigger.Dimensions
+      // (e.g. { Name: "ServiceName", Value: "order-service" }).
+      const dimensions = message.Trigger?.Dimensions || [];
+      const dimService = dimensions.find((d) => /^service$/i.test(d.name))?.value;
+
       return {
-        alarmName: message.AlarmName || "unknown-alarm",
+        alarmName,
         description: message.AlarmDescription || message.NewStateReason || "",
-        region: message.Region || process.env.AWS_REGION || "us-east-1",
+        region,
         timestamp: snsRecord.Timestamp || new Date().toISOString(),
         stateChangeTime: message.StateChangeTime || null,
         oldState: message.OldStateValue || null,
         newState: message.NewStateValue || "ALARM",
-        // In production, these would come from alarm tags via DescribeAlarms
-        client: "Acme Corp",
-        service: "payment-service",
-        environment: "Production",
+        client:      tags.Client      || tags.client      || "unknown-client",
+        service:     tags.Service     || tags.service     || dimService || "unknown-service",
+        environment: tags.Environment || tags.environment || "production",
       };
     }
   } catch (e) {
     // Not an SNS event — fall through to direct invocation parsing
   }
 
-  // Direct invocation (for local testing / manual Lambda invocation)
+  // ── Direct invocation (local testing / manual Lambda invoke) ──
+  // Caller may pass these fields explicitly; nothing is hardcoded.
   return {
-    alarmName: event.alarmName || "acme-payment-5xx-critical",
-    description: event.description || "5xx error threshold exceeded",
-    region: event.region || process.env.AWS_REGION || "us-east-1",
-    timestamp: event.timestamp || new Date().toISOString(),
-    client: event.client || "Acme Corp",
-    service: event.service || "payment-service",
-    environment: event.environment || "Production",
+    alarmName:   event.alarmName   || "unknown-alarm",
+    description: event.description || "",
+    region:      event.region      || process.env.AWS_REGION || "us-east-1",
+    timestamp:   event.timestamp   || new Date().toISOString(),
+    client:      event.client      || process.env.DEFAULT_CLIENT      || "unknown-client",
+    service:     event.service     || process.env.DEFAULT_SERVICE     || "unknown-service",
+    environment: event.environment || process.env.DEFAULT_ENVIRONMENT || "production",
   };
 }
