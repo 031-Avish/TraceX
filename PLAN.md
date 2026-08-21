@@ -126,6 +126,37 @@ model, in `agent-loop.js`. Two real gaps followed from that:
 - [x] Confirmed no real PII (the user's own email, etc.) leaked into any repo file — everything is
   synthetic demo data (`Acme Corp`, `dev-jsmith`, placeholder tokens).
 
+## Phase 2.7 — Source confidence + injection hardening
+
+Motivated by the same audit approach as Phase 2.6: trace every path where user-controlled
+data reaches the LLM and ask whether Claude can distinguish ground-truth AWS telemetry from
+free-form user text. The sanitizer handles PII; this phase handles adversarial instructions
+embedded in data — a different attack class entirely.
+
+- [x] `lambda-agent/src/utils/confidence-scorer.js` — deterministic (no LLM call, no added
+  latency, no new npm dependencies) confidence labeler. Assigns a base score per tool:
+  `get_alarm_details`/`get_service_metrics` → CRITICAL (0.95), `get_error_logs` → HIGH (0.85),
+  `get_deployment_logs` → HIGH (0.80), `get_commit_diff` → MEDIUM (0.65),
+  `get_recent_commits` → LOW (0.45). Valid-JSON structure adds a +0.05 bonus.
+  If an injection pattern is detected, confidence drops to 0.05 and the data field is
+  replaced with `[QUARANTINED]`. Covers three injection vectors: commit message text,
+  code comment injection in diffs (e.g. `// ignore previous instructions`), and
+  token-stuffing patterns (`[INST]`, `<|...|>`, `### System`).
+- [x] `lambda-agent/src/engine/agent-loop.js` — wired `applyConfidenceLabel(name, sanitized)`
+  between the sanitize and `_truncate` steps, so every tool result reaching Claude is wrapped
+  in a `{ _tracex_meta: { source, confidence, trust_level, guidance }, data }` envelope.
+  The `_tracex_meta` block appears at the front of the serialized string and survives
+  `_truncate()` even on large payloads. Updated `_systemPrompt()` to explain trust levels
+  so Claude knows CRITICAL/HIGH sources dominate, LOW sources cannot be sole root cause,
+  and SUSPECT results must be discarded entirely.
+
+Defense-in-depth context (no single layer is sufficient on its own):
+  1. Tool filtering (Phase 2.5) — unconfigured GitHub means no commit tool → zero commit injection surface
+  2. `_limitArrays` (Phase 2.5) — caps to 20 items, limiting attacker-controlled text volume
+  3. Injection pattern detection (this phase) — quarantines common adversarial patterns
+  4. System prompt framing (this phase) — Claude cannot conclude from LOW-trust evidence alone
+  5. Sanitizer on Slack output (Phase 2.6) — PII can't leak even in Claude's generated text
+
 ## Phase 3 — Submission polish
 
 - [x] Update `README.md` — rewritten end to end: corrected architecture diagram (was still showing
