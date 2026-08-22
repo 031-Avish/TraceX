@@ -126,6 +126,15 @@ async function resolveTenantConfig(tenantId, appId) {
       logGroupName: app.logGroupName,
       metricNamespace: app.metricNamespace,
       alarmName: app.alarmName,
+      // Optional, presenter-entered metadata (Applications page — "Related
+      // infra resource"): the specific downstream AWS resource this app is
+      // known to depend on. Purely informational — surfaced to the model as
+      // one more fact in the incident summary so it can go straight to
+      // get_dependency_resource_health instead of having to infer an ARN
+      // from log text alone; the agent still verifies with real tool calls
+      // rather than trusting this at face value.
+      infraResourceName: app.infraResourceName || null,
+      infraResourceArn: app.infraResourceArn || null,
       observabilitySources,
       github:
         connectors.github && githubSecret.token

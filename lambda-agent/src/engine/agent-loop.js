@@ -210,6 +210,9 @@ Cite specific evidence (commit SHAs, file/line, log timestamps) — do not specu
   }
 
   _incidentSummary(alarmData) {
+    const dependencyLine = alarmData.knownDependencyArn
+      ? `\nKnown dependency (from app config, unverified — confirm with get_dependency_resource_health before relying on it): ${alarmData.knownDependencyName || "unnamed"} (${alarmData.knownDependencyArn})`
+      : "";
     const summary = `INCIDENT ALERT
 
 Alarm: ${alarmData.alarmName || "unknown"}
@@ -219,7 +222,7 @@ Client: ${alarmData.client || "unknown"}
 Service: ${alarmData.service || "unknown"}
 Environment: ${alarmData.environment || "unknown"}
 Region: ${alarmData.region || "us-east-1"}
-Triggered at: ${alarmData.timestamp || new Date().toISOString()}
+Triggered at: ${alarmData.timestamp || new Date().toISOString()}${dependencyLine}
 
 Investigate this incident using the available tools and submit a triage brief when you have enough evidence.`;
     return sanitize(summary);

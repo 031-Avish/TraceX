@@ -422,6 +422,11 @@ async function simulateStatus(tenantId, appId) {
     alarmName,
     alarmState,
     incidentState: incident?.state || null,
+    // Lets the console tell "a fresh incident from this Break click" apart
+    // from a leftover record from a previous run on the same alarm — it
+    // can compare this against its own click timestamp directly instead of
+    // guessing from elapsed polling time.
+    startedAt: incident?.startedAt || null,
     confidence: incident?.confidence ?? null,
     severity: incident?.severity ?? null,
   });

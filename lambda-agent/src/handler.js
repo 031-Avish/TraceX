@@ -84,6 +84,11 @@ module.exports.main = async (event) => {
     github: tenantConfig?.github || null,
   };
 
+  // Surfaced to the agent as one more fact in the incident summary (see
+  // AgentLoop._incidentSummary) — not consumed by any tool directly.
+  alarmData.knownDependencyName = tenantConfig?.infraResourceName || null;
+  alarmData.knownDependencyArn = tenantConfig?.infraResourceArn || null;
+
   const llmClient = new LLMClient();
   const tools = buildTools(toolCtx);
   const agent = new AgentLoop({ llmClient, tools, log });

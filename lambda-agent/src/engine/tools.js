@@ -174,16 +174,16 @@ function buildTools(ctx) {
     {
       type: "function",
       function: {
-        name: "get_dynamodb_table_health",
+        name: "get_dependency_resource_health",
         description:
-          "Inspect a DynamoDB table's own live AWS-side state directly — its billing mode/provisioned capacity, item count, and its ConsumedWriteCapacityUnits + WriteThrottleEvents CloudWatch metrics. Unlike the logs/metrics tools above (which only cover the alerting service itself), this reaches into a downstream dependency's own resource config and health. Use this when a log entry or error references a specific DynamoDB table and you need to confirm whether that table itself — not the calling service's code — is the actual bottleneck (e.g. undersized provisioned capacity causing real throttling).",
+          "Inspect a downstream AWS resource's own live state directly by ARN — not the alerting service's logs, not its own alarm. Supports DynamoDB tables (billing mode/provisioned capacity, item count, ConsumedWriteCapacityUnits + WriteThrottleEvents), Lambda functions (state, reserved concurrency, Throttles/Invocations/Errors), and SQS queues (queue depth, in-flight count, oldest-message age, NumberOfMessagesSent). Use this whenever a log entry, error, or the incident's known-dependency ARN (given in the incident summary, if configured) points at a specific AWS resource and you need to confirm whether THAT resource — not the alerting service's own code — is the actual bottleneck.",
         parameters: {
           type: "object",
           properties: {
-            tableName: { type: "string", description: "The DynamoDB table name to inspect." },
-            windowMinutes: { type: "integer", description: "How far back to pull capacity/throttle metrics, in minutes. Default 15." },
+            resourceArn: { type: "string", description: "Full ARN of the resource to inspect, e.g. arn:aws:dynamodb:us-east-1:123456789012:table/my-table, arn:aws:lambda:us-east-1:123456789012:function:my-fn, or arn:aws:sqs:us-east-1:123456789012:my-queue." },
+            windowMinutes: { type: "integer", description: "How far back to pull capacity/throttle/error metrics, in minutes. Default 15." },
           },
-          required: ["tableName"],
+          required: ["resourceArn"],
         },
       },
     },
@@ -234,7 +234,7 @@ function buildTools(ctx) {
           get_commit_diff: (args) => github.getCommitDiff(args.sha),
         }
       : {}),
-    get_dynamodb_table_health: (args) => awsResource.getDynamoDbTableHealth(args.tableName, args.windowMinutes || 15),
+    get_dependency_resource_health: (args) => awsResource.getResourceHealth(args.resourceArn, args.windowMinutes || 15),
   };
 
   return { schemas, executors };
