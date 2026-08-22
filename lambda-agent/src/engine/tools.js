@@ -186,7 +186,8 @@ function buildTools(ctx) {
             },
             financialImpact: {
               type: "string",
-              description: "Bullet list quantifying business/cost impact (failed transactions, revenue rate, infra burn).",
+              description:
+                "Bullet list quantifying business/cost impact. If log entries include real transaction amounts, compute an actual dollar figure (sum of failed-transaction amounts, or average amount × failed-request count over the incident duration) and show the arithmetic — do not invent a number. If no amount data is available in the evidence you gathered, say so explicitly instead of guessing one.",
             },
             remediation: {
               type: "string",
