@@ -1,16 +1,71 @@
 # 🧭 TraceX — Autonomous SRE Incident Triage Agent
 
-An agent: given a production incident, it decides for itself which of your
-connected tools to check — CloudWatch logs, metrics, recent GitHub commits, a specific commit's
-diff — and how much evidence is enough before it concludes. It doesn't run the same fixed steps
-for every incident, because different incidents need different evidence, and because different
-customers connect different tools.
+Team TraceX — Presidio Innovation Sprint.
 
-**Who configures it: you, not us.** Connect your own CloudWatch scope, GitHub repo, and Slack
-channel through the console — TraceX never has standing access to anything you haven't explicitly
-connected. That's the actual product, not a demo convenience: an MSP-run NOC tool that only Presidio
-operates doesn't scale past Presidio's own client list; a self-service agent your own engineers
-configure does.
+## The Problem
+
+It's Sunday morning. Coffee's fresh, you've got a book open — and then your team lead calls:
+production is down, fix it now.
+
+So what do you actually do? You open every log tool you've got configured for the app. You
+message a coworker hoping they remember something. And before you know it, your whole Sunday
+is gone chasing one bug through logs.
+
+Tools like Grafana and Datadog are genuinely good at what they do — a pretty per-component
+dashboard, centralized log collection. What they don't do is **correlate errors across
+components to find the actual source.** They'll show you that a service is failing. They won't
+tell you *why*, when the "why" lives three services upstream.
+
+This isn't hypothetical. While handling an AWS account migration and load-testing the result,
+we hit a 500 in CloudWatch with no obvious source — and had to manually trace back through the
+entire architecture to find it. That took **weeks**, for one bug, in a single-cloud,
+single-account setup. Now imagine that same investigation across a multi-cloud environment. The
+problem doesn't get harder linearly — it compounds.
+
+## The Solution — TraceX
+
+TraceX is an autonomous agent that does that correlation work for you, in seconds instead of
+weeks.
+
+When your application triggers a CloudWatch alarm, it publishes to an SNS topic that invokes
+our triage agent. The agent is connected to Secrets Manager and DynamoDB, where your connector
+tokens and per-application configuration live. From there it:
+
+1. **Sanitizes** everything it reads — PII and secret patterns are stripped before any of it
+   reaches the model.
+2. **Assigns a confidence score** to every piece of evidence, by source — so a stray comment in
+   a commit message can't masquerade as ground truth, and known prompt-injection patterns get
+   quarantined before the model ever sees them.
+3. **Investigates autonomously** — it decides for itself which of *your* connected tools to
+   check (logs, metrics, recent commits, a specific diff, a downstream resource's own health)
+   and how much evidence is enough, instead of running the same fixed checklist every time.
+4. **Posts a root-cause analysis and recommendation** to Slack: where the error originated,
+   which deployment caused it (if any), severity, financial impact, and the full trace of how
+   the agent got there.
+
+You choose exactly which connectors it's allowed to touch — nothing is connected by default.
+
+**The result: what used to take an hour — or, in our own experience, weeks — takes about 60
+seconds.**
+
+## Is This a Product?
+
+Yes — and the architecture already reflects that, not just the pitch. Every customer's
+connectors (GitHub, Slack, Datadog, CloudWatch scope) live in a per-tenant DynamoDB registry,
+credentials are encrypted per-tenant in Secrets Manager behind a dedicated KMS key, and
+onboarding happens through a self-service console — nobody touches Terraform to add a new
+customer or application. That's the part of a SaaS that's hardest to retrofit later, and it's
+already built.
+
+It's also immediately valuable **inside Presidio**: plenty of client engagements hit exactly
+this problem — an error surfaces somewhere in a multi-component architecture, and someone loses
+days tracing it back by hand. TraceX is the same tool internally as it would be externally.
+
+The one deliberate gap for a real multi-customer rollout: today the agent reads everything
+through its own AWS IAM role in a single account. Onboarding an actual external customer means
+adding cross-account `AssumeRole` support (the customer grants a scoped role, we assume it) —
+a scoped, well-understood next milestone, not an open question. See **Viability and Execution
+Plan** below for the full rollout path.
 
 ---
 
@@ -41,8 +96,8 @@ Engineering choices are designed around reliability, security, and operability:
 - **Infrastructure as code:** Terraform provisions the agent, demo workload, alarms, connector
   registry, API, KMS key, hosted React console, and their least-privilege roles as a repeatable stack.
 - **Extensible architecture:** stable investigation tools are separated from provider-specific
-  collectors. CloudWatch and Datadog are supported today; additional observability and source-control
-  providers can be added without redesigning the agent loop.
+  collectors. CloudWatch and Datadog are supported today; a generic AWS-resource health tool covers
+  DynamoDB, Lambda, and SQS; additional providers can be added without redesigning the agent loop.
 
 The long-term vision is a governed incident-intelligence layer that can investigate across a
 customer's existing stack, preserve an auditable chain of evidence, and reduce mean time to
@@ -68,6 +123,10 @@ The key innovations are:
   it for a searchable collaboration channel—a commonly missed exposure point.
 - **Customer-owned onboarding:** a self-service console turns a one-off NOC workflow into a reusable
   product that teams can configure around their own applications, credentials, and alert routes.
+- **Genuine infra investigation, not just log-reading:** a generic AWS-resource health tool
+  (`get_dependency_resource_health`) lets the agent inspect a downstream dependency's own live
+  state — provisioned capacity, throttle metrics, concurrency — directly by ARN, so an infra
+  incident gets confirmed against real resource data, not just repeated back from an error string.
 
 Together, these choices make TraceX more than an LLM wrapper: it is a constrained, inspectable agent
 whose authority and evidence adapt to the environment it is investigating.
@@ -76,13 +135,14 @@ whose authority and evidence adapt to the environment it is investigating.
 
 The working prototype already covers the complete incident loop: deploy a monitored service,
 generate healthy traffic, inject a failure, trigger an alarm, investigate autonomously, and deliver
-a structured Slack brief. The repository includes one-command deployment, break/heal scripts, a
-self-service connector console, a realistic multi-service ShopCo test environment, and local tests
-for core agent behavior.
+a structured Slack brief. The repository includes one-command deployment, a self-service connector
+console, a realistic multi-service test environment covering three distinct incident classes
+(application code bug, infra capacity limit, downstream dependency failure), and local tests for
+core agent behavior.
 
 | Stage | Focus | Exit criteria |
 |---|---|---|
-| **Prototype — complete** | Autonomous triage, CloudWatch/GitHub/Slack integration, Datadog collection, secure connector storage, hosted console | A synthetic incident produces a grounded brief with a visible investigation path |
+| **Prototype — complete** | Autonomous triage, CloudWatch/GitHub/Slack integration, Datadog collection, secure connector storage, hosted console, generic AWS-resource health tool | A synthetic incident produces a grounded brief with a visible investigation path |
 | **Pilot — next 4–6 weeks** | Console authentication, tenant isolation, cross-account AWS roles, audit export, replay-based evaluation | 2–3 design partners run TraceX read-only against non-critical services with measured precision and triage-time savings |
 | **Production beta — 2–3 months** | SSO/RBAC, per-tenant encryption, retries and dead-letter handling, budgets, regional deployment, integration SDK | Security review passed; SLOs and support runbooks established; onboarding completed without engineering assistance |
 | **Scale — 3–6 months** | More observability/ITSM providers, incident history, team analytics, enterprise policy controls | Repeatable onboarding, paid conversions, and demonstrable reduction in mean time to understand |
@@ -130,7 +190,79 @@ that expansion without requiring customers to replace their existing tools.
 
 ---
 
-## What gets deployed
+## See It In Action
+
+### Setting up a connector
+
+Open **Connectors** in the console. AWS CloudWatch is always on — it authenticates via the
+agent's own IAM role, so there's no token to enter, it's simply always available as an
+evidence source. To add anything else:
+
+- **Datadog** — enter an API key and an application key with read access to logs, metrics, and
+  monitors, test the connection, save it.
+- **GitHub** — enter a personal access token and the repository you want commit history/diff
+  investigation against.
+- **Slack** — enter a bot token with `chat:write` scope and the channel ID where triage briefs
+  should post.
+
+GitHub and Slack use the same test-before-save flow: TraceX validates the connection before
+storing anything.
+
+### Registering an application
+
+Open **Applications → Add Application**. Each application maps to:
+
+- A **CloudWatch scope** — log group, metric namespace, and the alarm that should trigger this
+  application's investigations.
+- An optional **Datadog scope**, if this application is also monitored there — service tag,
+  environment, metric/log/monitor mapping.
+- A **Slack channel** for that application's notifications.
+- A **GitHub repository** (and optional path, for a monorepo) for commit/diff investigation.
+- An optional **related infra resource** — a name and ARN for a downstream AWS resource this
+  application depends on (a DynamoDB table, a Lambda function, a queue). This isn't required,
+  but when it's set, the agent sees it as a lead in the incident context and can go verify that
+  specific resource's live health directly, instead of only ever reasoning from the calling
+  application's own logs.
+
+We demo with two applications side by side to show two different failure classes: a
+microservice-style app (ShopCo) for application-level code bugs, and a separate single-service
+app (Acme) for infrastructure/dependency failures — so the same agent, unmodified, correctly
+tells the difference between "your code has a bug" and "your code is fine, a downstream AWS
+resource is the problem."
+
+### Watching an incident happen
+
+Trigger a synthetic incident from the **Simulator** page (or see the exact `curl` commands in
+[Demo Day Script](#demo-day-script) below). The card walks through: alert fired → agent
+investigating (live, real elapsed time — not a fake animation) → root cause found. The agent's
+own reasoning is visible turn by turn in its logs, and the finished brief — root cause,
+incident timeline, financial impact, and remediation — posts to Slack inside a thread, with a
+follow-up reply when the alarm clears.
+
+### Screenshots
+
+**Application-error incident (code bug, git-correlated):**
+
+<!-- TODO: add screenshot — Slack triage brief for the payment-service code-bug scenario -->
+
+**Infrastructure incident (downstream dependency, zero code correlation):**
+
+<!-- TODO: add screenshot — Slack triage brief for the acme-payment-service dependency scenario -->
+
+### Future scope
+
+A dry-run/rollback action the agent can propose and a human can execute with one click, and
+fuller log ingestion beyond the current error/warning-level filter, are the next two features on
+the roadmap after this build.
+
+---
+
+## Code & Architecture
+
+Everything below is implementation detail for engineers evaluating the build — not required
+reading to understand what TraceX does or why it's viable as a product.
+
+### What gets deployed
 
 ```
 ┌─────────────────────────── "PRODUCTION" (this demo's simulated client env) ──────────┐
@@ -156,7 +288,8 @@ that expansion without requiring customers to replace their existing tools.
 │    3. Hands the incident to OpenRouter with ONLY the tools this tenant configured      │
 │    4. Model decides which tools to call, in what order, and when it has enough        │
 │       evidence — get_error_logs, get_deployment_logs, get_service_metrics,            │
-│       get_alarm_details, get_recent_commits, get_commit_diff                          │
+│       get_alarm_details, get_recent_commits, get_commit_diff,                         │
+│       get_dependency_resource_health                                                  │
 │    5. Every tool result is volume-capped, sanitized, and assigned a trust label        │
 │       (most recent N items, not blind truncation) before it reaches the model         │
 │    6. Model calls submit_triage_brief once it has evidence — structured output,        │
@@ -182,15 +315,13 @@ chaos switch, alarm), the triage agent, and the connector console (DynamoDB tabl
 KMS key, Secrets Manager, config API + its own API Gateway, and the console itself hosted on
 S3 + CloudFront — a real HTTPS URL, not a local dev server).
 
----
-
-## End-to-End Runtime Workflow
+### End-to-End Runtime Workflow
 
 TraceX has two event paths: an **alarm path**, which opens and investigates an incident, and a
 **recovery path**, which closes the communication loop when the same CloudWatch alarm returns to
 `OK`.
 
-### Alarm path: `ALARM` → investigation → threaded brief
+#### Alarm path: `ALARM` → investigation → threaded brief
 
 1. **CloudWatch detects a threshold breach.** A metric alarm changes to `ALARM` and publishes its
    event to SNS, which invokes the TraceX Lambda.
@@ -246,7 +377,7 @@ TraceX has two event paths: an **alarm path**, which opens and investigates an i
 12. **Incident state is finalized.** DynamoDB is updated to `reported` or `report_failed`, together
     with completion time, severity, confidence, report timestamp, and any delivery error.
 
-### Recovery path: `OK` → correlated thread update
+#### Recovery path: `OK` → correlated thread update
 
 1. CloudWatch publishes another event when the alarm returns to `OK`.
 2. TraceX looks up the latest incident for the same tenant and alarm.
@@ -266,7 +397,7 @@ TraceX has two event paths: an **alarm path**, which opens and investigates an i
 | `lambda-agent/src/engine/tools.js` | Per-incident tool schemas, tenant-bound executors, GitHub capability filtering, and CloudWatch/Datadog routing |
 | `lambda-agent/src/engine/agent-loop.js` | Bounded tool-calling loop, evidence processing, structured completion, and safe fallback |
 | `lambda-agent/src/engine/llm-client.js` | OpenRouter-compatible model request boundary, token accounting, and cost estimation |
-| `lambda-agent/src/collectors/` | Read-only retrieval from CloudWatch, Datadog, and GitHub |
+| `lambda-agent/src/collectors/` | Read-only retrieval from CloudWatch, Datadog, GitHub, and generic AWS resources (DynamoDB/Lambda/SQS) |
 | `lambda-agent/src/utils/sanitizer.js` | PII and secret-pattern redaction before AI and Slack exposure |
 | `lambda-agent/src/utils/confidence-scorer.js` | Source trust labels and prompt-injection quarantine |
 | `lambda-agent/src/slack/slack-notifier.js` | Initial alert, threaded triage brief, recovery message, and final outbound sanitization |
@@ -299,9 +430,7 @@ Later OK event
 - Connector secrets exist in plaintext only in Lambda memory while an authorized request uses them.
 - Incident identity uses the alarm state-change timestamp, making normal SNS redelivery idempotent.
 
----
-
-## Why this is an agent, not a workflow
+### Why this is an agent, not a workflow
 
 The earlier version of this ran a hardcoded `Promise.all([logs, metrics, commits])` for every
 incident, then dumped everything into one LLM prompt. That doesn't hold up for a product where
@@ -312,9 +441,7 @@ for, because it's never offered in the first place, not because of a runtime per
 Full build log and the reasoning behind every architectural decision — including gaps that were
 found and fixed while stress-testing the earlier claims — is in [`PLAN.md`](./PLAN.md).
 
----
-
-## Security & Governance
+### Security & Governance
 
 - **Credentials are never shared with TraceX by default.** Nothing is connected until you
   configure it in the console. GitHub/Slack tokens are written to **AWS Secrets Manager**,
@@ -340,9 +467,7 @@ found and fixed while stress-testing the earlier claims — is in [`PLAN.md`](./
   Lambda's own same-account IAM role rather than real cross-account `AssumeRole`. All three are
   exactly what a production rollout would need next.
 
----
-
-## Quick Start
+### Quick Start
 
 ```bash
 # 1. Fill in your API keys (OpenRouter, Slack, GitHub)
@@ -356,41 +481,12 @@ cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 # Terraform hosts the console on S3 + CloudFront and prints its URL —
 # open it (already pointed at this deployment's config API, no setup
 # needed), then add your GitHub/Slack connectors and an application
-# (appId "payment-service" to match the demo's alarm)
+# (see "Registering an application" above)
 
-# 4. Wait 2 min for traffic to flow, then BREAK IT
-./break-it.sh
-
-# 5. Watch Slack — Triage Brief appears in ~2-3 min
-
-# 6. Reset for next demo
-./heal-it.sh
-
-# 7. Tear down
-./teardown.sh
+# 4. Trigger a scenario from the Simulator page, or see "Demo Day Script" below
 ```
 
-## Observability integrations
-
-The console now includes an integration catalog. CloudWatch remains the built-in/default
-provider and Datadog is implemented end to end. GitHub and Slack use the same test-before-save
-connection flow. Grafana, New Relic, Elastic, Splunk, and Azure Monitor appear as roadmap cards
-and are deliberately not presented as working connectors.
-
-To connect Datadog:
-
-1. Open **Connectors → Datadog** and select the Datadog site.
-2. Enter an API key and an application key with read access to logs, metrics, and monitors.
-3. Click **Test connection**, then **Save connection**.
-4. Open **Applications**, select Datadog, and map the service tag, environment, metric query,
-   monitor ID, and optional log-query overrides.
-
-At incident time the agent keeps the same stable tools (`get_error_logs`,
-`get_service_metrics`, and so on), while the executor routes them to the provider mapped to
-the affected application. Connector secrets remain in Secrets Manager and are never returned
-to the browser.
-
-## Required existing VPC
+### Required existing VPC
 
 TraceX uses the authority-provided `path-labs-innovation-sprint-vpc`. Terraform discovers that
 VPC and the `path-labs-innovation-sprint-private-*` subnets by their `Name` tags and attaches all
@@ -406,9 +502,7 @@ If you skip step 3, the agent falls back to the original env-var-driven single-t
 config (`LOG_GROUP_NAME`, `GITHUB_TOKEN`, etc. from `terraform.tfvars`) — the demo still works,
 it just isn't demonstrating the self-service connector path.
 
----
-
-## Demo Day Script
+### Demo Day Script
 
 The demo runs three scenarios, each proving a different kind of investigation — a code-level
 bug the agent finds via git history, a pure infra capacity limit with zero code correlation, and
@@ -425,9 +519,9 @@ aws logs tail /aws/lambda/presidio-sre-agent-triage --follow
 # Slack: show the incident channel — quiet, no alerts
 ```
 
-### Scenario 1 — Application Errors (payment-service, ShopCo)
-A real, unguarded `currency.toUpperCase()` null-safety bug in `payment-service`'s `charge()`
-code, reached when `order-service` forwards a malformed payload.
+**Scenario 1 — Application Errors (payment-service, ShopCo).** A real, unguarded
+`currency.toUpperCase()` null-safety bug in `payment-service`'s `charge()` code, reached when
+`order-service` forwards a malformed payload.
 ```bash
 curl -X POST $CONFIG_API/simulate/payment-service/break
 # ~45-90s: shopco-payment-5xx-critical alarm fires
@@ -436,17 +530,17 @@ curl -X POST $CONFIG_API/simulate/payment-service/break
 curl -X POST $CONFIG_API/simulate/payment-service/heal
 ```
 
-### Scenario 2 — Infrastructure Capacity Limit (inventory-service, ShopCo)
-Real Lambda concurrency throttle — zero code correlation, by design.
+**Scenario 2 — Infrastructure Capacity Limit (inventory-service, ShopCo).** Real Lambda
+concurrency throttle — zero code correlation, by design.
 ```bash
 curl -X POST $CONFIG_API/simulate/inventory-service/break
 curl -X POST $CONFIG_API/simulate/inventory-service/heal
 ```
 
-### Scenario 3 — Downstream Dependency Failure (acme-payment-service)
-A real DynamoDB table (`acme-payment-idempotency`) provisioned undersized. Break fires a
-one-shot burst-load function against that table — payment-service's own code never changes,
-and there's no code deploy to correlate against.
+**Scenario 3 — Downstream Dependency Failure (acme-payment-service).** A real DynamoDB table
+(`acme-payment-idempotency`) provisioned undersized. Break fires a one-shot burst-load function
+against that table — payment-service's own code never changes, and there's no code deploy to
+correlate against.
 ```bash
 curl -X POST $CONFIG_API/simulate/acme-payment-service/break
 # self-expires after ~80s, no heal step needed
@@ -461,9 +555,7 @@ get_dependency_resource_health(...)`), then the Slack Triage Brief: root cause, 
 financial impact, remediation, and the investigation path the agent actually chose — not a
 fixed script.
 
----
-
-## How the Chaos Toggles Work
+### How the Chaos Toggles Work
 
 Each scenario has its own real, instantly-reversible break mechanism — not a single global
 switch. See `lambda-config-api/index.js`'s `SIMULATE_REGISTRY` for the authoritative mapping:
@@ -475,9 +567,7 @@ inventory-service     → zeroed Lambda reserved concurrency (real AWS throttle)
 acme-payment-service  → one-shot burst-load invoke against a real, undersized DynamoDB table
 ```
 
----
-
-## Pre-Hackathon Checklist
+### Pre-Hackathon Checklist
 
 - [ ] OpenRouter API key and a model that supports tool/function calling
 - [ ] Slack app with `chat:write` scope, bot token, channel ID
@@ -486,9 +576,7 @@ acme-payment-service  → one-shot burst-load invoke against a real, undersized 
 - [ ] AWS CLI installed
 - [ ] Node.js 18+ installed
 
----
-
-## Project Structure
+### Project Structure
 
 ```
 presidio-fullstack/
@@ -506,7 +594,7 @@ presidio-fullstack/
 │   ├── package.json
 │   └── src/
 │       ├── handler.js           # Entry point — resolves tenant config, runs the agent loop
-│       ├── collectors/          # CloudWatch Logs/Metrics, GitHub — the raw data sources
+│       ├── collectors/          # CloudWatch Logs/Metrics, GitHub, generic AWS resources
 │       ├── engine/
 │       │   ├── llm-client.js    # OpenRouter wrapper — provider-specific boundary
 │       │   ├── tools.js         # Wraps collectors as tool schemas, gated by what's configured
@@ -519,16 +607,14 @@ presidio-fullstack/
 ├── lambda-config-api/            # CRUD API backing the console (connectors + applications)
 │
 ├── console/                      # React (Vite) self-service connector console
-│   └── src/pages/                # Overview, Connectors, Applications, Settings
+│   └── src/pages/                # Overview, Connectors, Applications, Settings, Simulator
 │
 ├── lambda-demo-app/               # Fake Payment Service (simulated client environment)
 ├── lambda-traffic-gen/            # Traffic Generator
 ├── scripts/
 │   └── setup-github-repo.sh      # Create demo Git repo
 │
-├── deploy.sh                     # ⭐ One-command deploy
-├── break-it.sh                   # 🚨 Trigger the incident
-├── heal-it.sh                    # ✅ Reset for next demo
-├── teardown.sh                   # 💣 Destroy everything
+├── deploy.sh                     # One-command deploy
+├── teardown.sh                   # Destroy everything
 └── PLAN.md                       # Full build log — every decision and why
 ```
