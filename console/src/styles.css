@@ -410,6 +410,11 @@ button.danger {
   font-size: 12px;
   color: var(--text-dim);
 }
+.meta-infra {
+  margin-top: 2px;
+  color: var(--accent);
+  opacity: 0.85;
+}
 .app-actions {
   display: flex;
   gap: 8px;
@@ -486,7 +491,13 @@ button.danger {
 .page-heading p, .setup-header p { margin: 5px 0 0; color: var(--text-dim); font-size: 13px; }
 .connection-count { padding: 6px 10px; border: 1px solid var(--panel-border); border-radius: 999px; color: var(--text-dim); font-size: 12px; }
 .catalog-section { margin-bottom: 30px; }
-.connector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+/* align-items: start is the key fix here — CSS Grid's default (stretch)
+   forces every tile sharing a row with the tallest tile to match its
+   height. The CloudWatch tile's description is a full paragraph (see
+   connectors.js) while every other tile's is one short sentence; without
+   this override, Datadog and Grafana were being stretched from their
+   natural 126px to CloudWatch's ~450px just because they shared a row. */
+.connector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; align-items: start; }
 .connector-tile { position: relative; min-height: 126px; padding: 18px; display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; align-items: start; text-align: left; background: var(--panel); border: 1px solid var(--panel-border); color: var(--text); }
 .connector-tile:hover { border-color: #3a4655; filter: none; }
 .connector-tile.unavailable { opacity: .48; cursor: default; }
@@ -494,8 +505,24 @@ button.danger {
 .provider-icon.large { width: 52px; height: 52px; font-size: 22px; }
 .tile-copy { display: flex; flex-direction: column; min-width: 0; }
 .tile-copy strong { font-size: 14px; }
-.tile-copy small { color: var(--text-dim); font-size: 12px; margin-top: 5px; line-height: 1.4; }
-.last-tested { position: absolute; left: 74px; bottom: 14px; font-size: 10px; color: var(--text-dim); }
+/* Clamp to 3 lines so one connector having a much longer description (e.g.
+   CloudWatch's) doesn't balloon its own tile out of proportion with the
+   rest of the grid even with align-items: start above. */
+.tile-copy small {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 5px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Flows below the icon/copy/badge row instead of being absolutely
+   positioned — absolute positioning assumed a fixed tile height, which
+   broke down for tiles whose badge/description wraps onto extra lines
+   (e.g. CloudWatch's infra badge), overlapping this text with it. */
+.last-tested { grid-column: 2 / -1; margin-top: 8px; font-size: 10px; color: var(--text-dim); }
 .connector-setup { max-width: 700px; margin: 0 auto; }
 .back-button { background: transparent; color: var(--text-dim); padding: 0; margin-bottom: 24px; }
 .setup-header { display: flex; gap: 15px; align-items: center; margin-bottom: 18px; }
@@ -538,6 +565,49 @@ button.danger {
 .infra-callout-icon { font-size: 18px; line-height: 1; }
 .infra-callout strong { display: block; margin-bottom: 4px; font-size: 13px; color: var(--text); }
 .infra-callout p { margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* ── Overview: stat tiles + live status ──────────────────────────────── */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.stat-tile {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.stat-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.stat-of { font-size: 15px; font-weight: 500; color: var(--text-dim); }
+.stat-label { margin-top: 5px; font-size: 12px; color: var(--text-dim); }
+.stat-tile.stat-alert { border-color: rgba(248, 81, 73, 0.4); }
+.stat-tile.stat-alert .stat-value { color: var(--danger); }
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.status-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: #0e1420;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text);
+}
+.status-item:hover { border-color: #3a4655; }
+.status-item .status-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.status-item .status-appid { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-item .status-state { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
 
 /* ── Overview: "getting started" checklist ────────────────────────────── */
 .setup-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }

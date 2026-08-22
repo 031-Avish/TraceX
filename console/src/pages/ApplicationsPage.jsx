@@ -22,6 +22,10 @@ const EMPTY_FORM = {
   githubRepoOwner: "",
   githubRepoName: "",
   slackChannelId: "",
+  // Purely descriptive demo-narrative metadata — not read by any agent
+  // tool-calling logic, just something for the presenter to point at.
+  infraResourceName: "",
+  infraResourceArn: "",
 };
 
 export default function ApplicationsPage() {
@@ -139,6 +143,11 @@ export default function ApplicationsPage() {
                   {app.config.alarmName || app.config.monitorId || "—"} · env:{" "}
                   {app.config.environment || "production"}
                 </div>
+                {app.config.infraResourceName && (
+                  <div className="meta meta-infra" title={app.config.infraResourceArn || undefined}>
+                    Depends on: {app.config.infraResourceName}
+                  </div>
+                )}
               </div>
               <div className="app-actions">
                 <button className="secondary" onClick={() => startEdit(app)}>
@@ -280,6 +289,28 @@ export default function ApplicationsPage() {
                 value={form.slackChannelId}
                 onChange={(e) => updateField("slackChannelId", e.target.value)}
                 placeholder="uses connector default"
+              />
+            </div>
+
+            {/* ── Related infra resource (optional, demo narrative only) ─── */}
+            {/* Purely descriptive — not read by any agent tool-calling logic. */}
+            <div className="field-group-label full">
+              Related infra resource <span className="hint-inline">(optional — for demo narrative only)</span>
+            </div>
+            <div className="field">
+              <label>Resource name</label>
+              <input
+                value={form.infraResourceName}
+                onChange={(e) => updateField("infraResourceName", e.target.value)}
+                placeholder="acme-payment-idempotency (DynamoDB table)"
+              />
+            </div>
+            <div className="field">
+              <label>Resource ARN</label>
+              <input
+                value={form.infraResourceArn}
+                onChange={(e) => updateField("infraResourceArn", e.target.value)}
+                placeholder="arn:aws:dynamodb:us-east-1:...:table/..."
               />
             </div>
 

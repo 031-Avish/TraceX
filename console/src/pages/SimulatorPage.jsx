@@ -6,6 +6,19 @@ import { listApplications, simulateBreak, simulateHeal, simulateStatus } from ".
 const POLL_INTERVAL_MS = 5000;
 const RECOVERED_RESET_MS = 4500;
 
+// simulateStatus (lambda-config-api/index.js) queries the most recent
+// INCIDENT#<alarmName># item unconditionally — it has no way to tell a
+// fresh incident from THIS "Break" click apart from a leftover record from
+// a previous, already-finished run on the same alarm (its response doesn't
+// even include the incident's startedAt, only state/confidence/severity).
+// So the client has to guard against showing a stale result itself: a real
+// CloudWatch alarm here takes ~45-90s minimum to evaluate and enter ALARM,
+// so anything claiming to be past "breaking" (investigating/reported/
+// recovered) inside that window cannot possibly belong to this run. 40s
+// gives a small safety margin under the documented 45s floor. See
+// seenInvestigatingRef below for the second half of the guard.
+const MIN_ALARM_EVAL_MS = 40000;
+
 // The three scenario groups the product plan calls for. Each app card is
 // slotted into exactly one of these by appId; anything registered outside
 // this list still shows up (see "Other applications" below) instead of
@@ -179,12 +192,44 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
   const [healSeconds, setHealSeconds] = useState(0);
   const intervalRef = useRef(null);
   const resetTimerRef = useRef(null);
+  // When this run's "Break" was clicked, and whether we've locally observed
+  // this run actually reach "investigating" — the two-part stale-incident
+  // guard described above MIN_ALARM_EVAL_MS. Both reset on a fresh Break
+  // click and when the card settles back to "healthy".
+  const breakClickedAtRef = useRef(null);
+  const seenInvestigatingRef = useRef(false);
 
   const polling = sim.phase !== "healthy";
 
   const poll = useCallback(() => {
     simulateStatus(apiUrl, tenantId, app.appId)
-      .then((data) => setSim((current) => ({ ...current, ...nextPhase(current, data) })))
+      .then((data) => {
+        setSim((current) => {
+          const candidate = nextPhase(current, data);
+          if (candidate.phase === current.phase) return { ...current, ...candidate };
+
+          const advancesPastBreaking =
+            candidate.phase === "investigating" || candidate.phase === "reported" || candidate.phase === "recovered";
+          const elapsed = breakClickedAtRef.current ? Date.now() - breakClickedAtRef.current : Infinity;
+
+          if (advancesPastBreaking && elapsed < MIN_ALARM_EVAL_MS) {
+            // Too soon for this to be a real CloudWatch transition from
+            // this click — almost certainly a stale INCIDENT# record left
+            // over from a previous run on this alarm. Keep showing the
+            // waiting state instead of jumping straight to a stale result.
+            return current;
+          }
+          if ((candidate.phase === "reported" || candidate.phase === "recovered") && !seenInvestigatingRef.current) {
+            // Never locally observed this run pass through "investigating" —
+            // same stale-record guard, belt-and-suspenders against a leftover
+            // "reported"/"recovered" record surfacing without ever having
+            // been preceded by a genuine "investigating" state this run.
+            return current;
+          }
+          if (candidate.phase === "investigating") seenInvestigatingRef.current = true;
+          return { ...current, ...candidate };
+        });
+      })
       .catch((e) => showToast(e.message, "error"));
   }, [apiUrl, tenantId, app.appId, showToast]);
 
@@ -244,6 +289,8 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
     resetTimerRef.current = setTimeout(() => {
       setSim({ phase: "healthy", confidence: null, severity: null, error: null });
       setHealTriggered(false);
+      breakClickedAtRef.current = null;
+      seenInvestigatingRef.current = false;
     }, RECOVERED_RESET_MS);
     return () => clearTimeout(resetTimerRef.current);
   }, [sim.phase]);
@@ -257,6 +304,8 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
       setBreaking(true);
       await simulateBreak(apiUrl, app.appId);
       showToast(`Synthetic incident triggered for ${app.appId}`, "ok");
+      breakClickedAtRef.current = Date.now();
+      seenInvestigatingRef.current = false;
       setSim({ phase: "breaking", confidence: null, severity: null, error: null });
       setHealTriggered(false);
     } catch (err) {
@@ -287,6 +336,11 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
         <div>
           <div className="title">{app.appId}</div>
           <div className="hint">env: {app.config?.environment || "production"}</div>
+          {app.config?.infraResourceName && (
+            <div className="hint" title={app.config?.infraResourceArn || undefined}>
+              Depends on: {app.config.infraResourceName}
+            </div>
+          )}
         </div>
       </div>
 
