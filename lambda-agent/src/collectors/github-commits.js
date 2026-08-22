@@ -1,8 +1,15 @@
 // src/collectors/github-commits.js
 // Fetches recent Git commits from the application repository.
 // Used to correlate deployments with incident timing.
+//
+// Talks to GitHub's REST API directly via fetch() rather than @octokit/rest —
+// that package is ESM-only from v20+ and crashes require() in this CommonJS
+// Lambda (ERR_REQUIRE_ESM) at module load, taking down every invocation
+// regardless of whether GitHub is even configured for the incident. Only two
+// simple endpoints are needed here, so a thin adapter avoids the dependency
+// entirely instead of working around it.
 
-const { Octokit } = require("@octokit/rest");
+const API_BASE = "https://api.github.com";
 
 class GitHubCommitsCollector {
   /**
@@ -12,13 +19,10 @@ class GitHubCommitsCollector {
   constructor(config = {}) {
     this.owner = config.owner || process.env.GITHUB_REPO_OWNER;
     this.repo = config.repo || process.env.GITHUB_REPO_NAME;
+    this.token = config.token || process.env.GITHUB_TOKEN;
 
-    const token = config.token || process.env.GITHUB_TOKEN;
-    if (!token) {
+    if (!this.token) {
       console.warn("  ⚠ No GitHub token configured — commit fetching will be skipped");
-      this.octokit = null;
-    } else {
-      this.octokit = new Octokit({ auth: token });
     }
   }
 
@@ -26,7 +30,7 @@ class GitHubCommitsCollector {
    * Get the last N commits with their details.
    */
   async getRecentCommits(count = 10) {
-    if (!this.octokit || !this.owner || !this.repo) {
+    if (!this.token || !this.owner || !this.repo) {
       return {
         success: false,
         count: 0,
@@ -36,11 +40,7 @@ class GitHubCommitsCollector {
     }
 
     try {
-      const { data } = await this.octokit.repos.listCommits({
-        owner: this.owner,
-        repo: this.repo,
-        per_page: count,
-      });
+      const data = await this._request(`/repos/${this.owner}/${this.repo}/commits?per_page=${count}`);
 
       const commits = data.map((c) => ({
         sha: c.sha.substring(0, 7),
@@ -67,14 +67,10 @@ class GitHubCommitsCollector {
    * Get diff details for a specific commit (for deeper analysis).
    */
   async getCommitDiff(sha) {
-    if (!this.octokit) return { success: false, diff: null };
+    if (!this.token) return { success: false, diff: null };
 
     try {
-      const { data } = await this.octokit.repos.getCommit({
-        owner: this.owner,
-        repo: this.repo,
-        ref: sha,
-      });
+      const data = await this._request(`/repos/${this.owner}/${this.repo}/commits/${encodeURIComponent(sha)}`);
 
       return {
         success: true,
@@ -93,6 +89,23 @@ class GitHubCommitsCollector {
     } catch (error) {
       return { success: false, diff: null, error: error.message };
     }
+  }
+
+  async _request(path) {
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      const error = new Error(`GitHub ${response.status}: ${response.statusText}`);
+      error.status = response.status;
+      throw error;
+    }
+    return response.json();
   }
 }
 

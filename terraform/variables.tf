@@ -29,7 +29,7 @@ variable "anthropic_api_key" {
 
 variable "openrouter_model" {
   type    = string
-  default = "anthropic/claude-sonnet-4"
+  default = "anthropic.claude-sonnet-5"
 }
 
 variable "slack_bot_token" {
