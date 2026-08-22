@@ -85,40 +85,48 @@ async function resolveTenantConfig(tenantId, appId) {
 
     if (!app) return null;
 
-    // Infer the observability provider from which connector is actually connected,
-    // not from a per-app dropdown (which was removed from the UI). Priority order:
-    //   1. Datadog — if the connector exists and has credentials
-    //   2. CloudWatch — always available via the Lambda's IAM role, no credentials needed
-    // This matches the Integrations page model: the provider is determined by what
-    // the tenant connected, not by a choice made at the individual application level.
-    const datadogConnector = connectors.datadog;
-    const observabilityConnector = datadogConnector || connectors.cloudwatch || null;
-    const [githubSecret, slackSecret, observabilitySecret] = await Promise.all([
+    // Build the list of observability sources actually available for this app —
+    // not a single provider "choice". CloudWatch is always included: the alarm
+    // that triggered this investigation is a CloudWatch alarm, so its metric and
+    // log group are always relevant ground truth. Any other connected+ready
+    // provider is added alongside it, letting the agent itself decide which
+    // source(s) to query per incident instead of the registry picking for it.
+    // Add an entry here for each new observability connector type as its
+    // collector is built — nothing else in the agent needs to change.
+    const OBSERVABILITY_SOURCE_BUILDERS = {
+      datadog: (connector, secret) =>
+        secret.apiKey && {
+          provider: "datadog",
+          apiKey: secret.apiKey,
+          appKey: secret.appKey,
+          site: connector.site || "us1",
+          service: app.serviceName || appId,
+          environment: app.environment,
+          errorQuery: app.errorQuery,
+          deploymentQuery: app.deploymentQuery,
+          metricQuery: app.metricQuery,
+          monitorId: app.monitorId,
+        },
+    };
+
+    const observabilityConnectorTypes = Object.keys(OBSERVABILITY_SOURCE_BUILDERS).filter((type) => connectors[type]);
+    const [githubSecret, slackSecret, ...observabilitySecrets] = await Promise.all([
       connectors.github ? getSecret(connectors.github.secretRef) : {},
       connectors.slack ? getSecret(connectors.slack.secretRef) : {},
-      datadogConnector ? getSecret(datadogConnector.secretRef) : {},
+      ...observabilityConnectorTypes.map((type) => getSecret(connectors[type].secretRef)),
     ]);
 
-    const datadogReady = datadogConnector && observabilitySecret.apiKey;
+    const observabilitySources = [{ provider: "cloudwatch" }];
+    observabilityConnectorTypes.forEach((type, i) => {
+      const source = OBSERVABILITY_SOURCE_BUILDERS[type](connectors[type], observabilitySecrets[i]);
+      if (source) observabilitySources.push(source);
+    });
 
     return {
       logGroupName: app.logGroupName,
       metricNamespace: app.metricNamespace,
       alarmName: app.alarmName,
-      observability: datadogReady
-          ? {
-              provider: "datadog",
-              apiKey: observabilitySecret.apiKey,
-              appKey: observabilitySecret.appKey,
-              site: datadogConnector.site || "us1",
-              service: app.serviceName || appId,
-              environment: app.environment,
-              errorQuery: app.errorQuery,
-              deploymentQuery: app.deploymentQuery,
-              metricQuery: app.metricQuery,
-              monitorId: app.monitorId,
-            }
-          : { provider: "cloudwatch" },
+      observabilitySources,
       github:
         connectors.github && githubSecret.token
           ? { token: githubSecret.token, owner: app.githubRepoOwner || connectors.github.owner, repo: app.githubRepoName || connectors.github.repo }

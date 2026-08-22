@@ -37,6 +37,17 @@ const SOURCE_PROFILES = {
 
 const DEFAULT_PROFILE = { base: 0.70, label: "MEDIUM", type: "unknown" };
 
+// Observability tools are provider-suffixed (get_error_logs_cloudwatch,
+// get_error_logs_datadog, ...) since tools.js now offers one variant per
+// configured source. Trust level depends on the operation, not which
+// provider served it, so fall back to the un-suffixed profile when there's
+// no exact match — this stays generic across any future provider name.
+function resolveProfile(toolName) {
+  if (SOURCE_PROFILES[toolName]) return SOURCE_PROFILES[toolName];
+  const withoutProviderSuffix = toolName.replace(/_[a-z0-9]+$/, "");
+  return SOURCE_PROFILES[withoutProviderSuffix] || DEFAULT_PROFILE;
+}
+
 // ── Prompt-injection detection ─────────────────────────────────────────────────
 // Covers the three vectors present in this system:
 //   1. Commit message injection  — "ignore previous instructions"
@@ -112,7 +123,7 @@ const GUIDANCE = {
  * @returns {string}              - JSON string of { _tracex_meta, data }
  */
 function applyConfidenceLabel(toolName, sanitizedStr) {
-  const profile = SOURCE_PROFILES[toolName] || DEFAULT_PROFILE;
+  const profile = resolveProfile(toolName);
   const injectionDetected = detectInjection(sanitizedStr);
 
   const confidence = injectionDetected

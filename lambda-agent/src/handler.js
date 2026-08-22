@@ -76,11 +76,11 @@ module.exports.main = async (event) => {
     metricDimensions: alarmData.metricDimensions || [],
     metricStatistic: alarmData.metricStatistic || "Sum",
     alarmName: alarmData.alarmName || tenantConfig?.alarmName,
-    // A CloudWatch alarm must be investigated against the CloudWatch metric
-    // and log group that raised it, even when Datadog is also connected.
-    observability: alarmData.metricNamespace
-      ? { provider: "cloudwatch" }
-      : (tenantConfig?.observability || { provider: "cloudwatch" }),
+    // Every source this app has configured+ready — CloudWatch is always one of
+    // them (the alarm that triggered this is a CloudWatch alarm), Datadog or
+    // future providers are added on top when connected. The agent picks which
+    // to call, not this handler.
+    observabilitySources: tenantConfig?.observabilitySources || [{ provider: "cloudwatch" }],
     github: tenantConfig?.github || null,
   };
 
