@@ -9,15 +9,15 @@ const RECOVERED_RESET_MS = 4500;
 // simulateStatus (lambda-config-api/index.js) queries the most recent
 // INCIDENT#<alarmName># item unconditionally — it has no way to tell a
 // fresh incident from THIS "Break" click apart from a leftover record from
-// a previous, already-finished run on the same alarm (its response doesn't
-// even include the incident's startedAt, only state/confidence/severity).
-// So the client has to guard against showing a stale result itself: a real
-// CloudWatch alarm here takes ~45-90s minimum to evaluate and enter ALARM,
-// so anything claiming to be past "breaking" (investigating/reported/
-// recovered) inside that window cannot possibly belong to this run. 40s
-// gives a small safety margin under the documented 45s floor. See
-// seenInvestigatingRef below for the second half of the guard.
-const MIN_ALARM_EVAL_MS = 40000;
+// a previous, already-finished run on the same alarm. Its response now
+// includes that item's real `startedAt` (ISO string, or null if no incident
+// exists yet), so the client can correlate deterministically: only trust a
+// polled incident as belonging to this run if its startedAt is at or after
+// the moment "Break" was clicked. CLOCK_SKEW_BUFFER_MS absorbs the gap
+// between the client's Date.now() and DynamoDB's/CloudWatch's own clocks —
+// not a guess at alarm-evaluation latency, just clock-skew slack. See
+// seenInvestigatingRef below for the second, independent guard.
+const CLOCK_SKEW_BUFFER_MS = 10000;
 
 // The three scenario groups the product plan calls for. Each app card is
 // slotted into exactly one of these by appId; anything registered outside
@@ -194,7 +194,7 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
   const resetTimerRef = useRef(null);
   // When this run's "Break" was clicked, and whether we've locally observed
   // this run actually reach "investigating" — the two-part stale-incident
-  // guard described above MIN_ALARM_EVAL_MS. Both reset on a fresh Break
+  // guard described above CLOCK_SKEW_BUFFER_MS. Both reset on a fresh Break
   // click and when the card settles back to "healthy".
   const breakClickedAtRef = useRef(null);
   const seenInvestigatingRef = useRef(false);
@@ -210,20 +210,31 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
 
           const advancesPastBreaking =
             candidate.phase === "investigating" || candidate.phase === "reported" || candidate.phase === "recovered";
-          const elapsed = breakClickedAtRef.current ? Date.now() - breakClickedAtRef.current : Infinity;
 
-          if (advancesPastBreaking && elapsed < MIN_ALARM_EVAL_MS) {
-            // Too soon for this to be a real CloudWatch transition from
-            // this click — almost certainly a stale INCIDENT# record left
-            // over from a previous run on this alarm. Keep showing the
-            // waiting state instead of jumping straight to a stale result.
-            return current;
+          // Only the branches driven by an actual INCIDENT# record
+          // (data.incidentState truthy) can be stale — the "investigating"
+          // reached via a bare live alarmState === "ALARM" with no incident
+          // record yet (see nextPhase's default branch) has nothing to
+          // correlate against and nothing to be stale about, so it's trusted
+          // directly.
+          if (advancesPastBreaking && data?.incidentState) {
+            const startedAtMs = data.startedAt ? new Date(data.startedAt).getTime() : null;
+            const isFreshIncident =
+              startedAtMs !== null &&
+              breakClickedAtRef.current !== null &&
+              startedAtMs >= breakClickedAtRef.current - CLOCK_SKEW_BUFFER_MS;
+            if (!isFreshIncident) {
+              // This INCIDENT# record started before this run's "Break" click
+              // (or has no startedAt at all) — a leftover from a previous,
+              // already-finished run on this alarm. Keep showing the waiting
+              // state instead of jumping straight to a stale result.
+              return current;
+            }
           }
           if ((candidate.phase === "reported" || candidate.phase === "recovered") && !seenInvestigatingRef.current) {
-            // Never locally observed this run pass through "investigating" —
-            // same stale-record guard, belt-and-suspenders against a leftover
-            // "reported"/"recovered" record surfacing without ever having
-            // been preceded by a genuine "investigating" state this run.
+            // Defense in depth, independent of the startedAt check above:
+            // never locally observed this run pass through "investigating" —
+            // don't trust a "reported"/"recovered" signal regardless.
             return current;
           }
           if (candidate.phase === "investigating") seenInvestigatingRef.current = true;
