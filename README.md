@@ -249,6 +249,9 @@ follow-up reply when the alarm clears.
 
 <!-- TODO: add screenshot — Slack triage brief for the acme-payment-service dependency scenario -->
 
+The agent that produces these briefs lives in [`lambda-agent/`](./lambda-agent) — see
+[Project Structure](#project-structure) below for what's in it.
+
 ### Future scope
 
 A dry-run/rollback action the agent can propose and a human can execute with one click, and
