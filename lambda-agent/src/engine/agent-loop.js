@@ -52,6 +52,10 @@ class AgentLoop {
       totalInputTokens += response.usage.inputTokens;
       totalOutputTokens += response.usage.outputTokens;
 
+      if (response.stopReason === "length") {
+        this.log.warn(`Turn ${turn}: model hit the output token limit mid-generation — its response (and any tool-call arguments) may be truncated/invalid JSON`);
+      }
+
       messages.push(response.assistantMessage);
 
       if (!response.toolCalls.length) {
@@ -71,15 +75,31 @@ class AgentLoop {
       for (const toolCall of response.toolCalls) {
         const name = toolCall.function.name;
         let args = {};
-        try { args = JSON.parse(toolCall.function.arguments || "{}"); } catch { args = {}; }
+        try {
+          args = JSON.parse(toolCall.function.arguments || "{}");
+        } catch (parseError) {
+          this.log.warn(
+            `Turn ${turn}: could not parse arguments for ${name} (${parseError.message}) — raw: ${(toolCall.function.arguments || "").slice(0, 300)}`
+          );
+          args = {};
+        }
 
         // Terminal tool — agent is done investigating
         if (name === "submit_triage_brief") {
           const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
           const cost = this.llm.estimateCost(totalInputTokens, totalOutputTokens);
           this.log.ok(`Agent concluded after ${investigationPath.length} tool call(s): ${investigationPath.join(" → ") || "(none)"} → submit_triage_brief`);
+          // Not every model enforces a tool schema's "required" fields with the
+          // same rigor (cross-provider tool-calling compliance varies) — fall
+          // back rather than let a missing field become `undefined` this far
+          // downstream (it broke DynamoDB's UpdateExpression builder).
           return {
-            ...args,
+            rootCause: args.rootCause || "Not provided by the model.",
+            timeline: args.timeline || "Not provided by the model.",
+            financialImpact: args.financialImpact || "Not provided by the model.",
+            remediation: args.remediation || "Not provided by the model.",
+            confidence: typeof args.confidence === "number" ? args.confidence : 0,
+            severity: args.severity || "P1",
             triageTimeSec: elapsedSec,
             investigationPath,
             tokenUsage: { input: totalInputTokens, output: totalOutputTokens },

@@ -57,11 +57,16 @@ async function updateIncident(tenantId, sk, updates) {
   const names = {};
   const values = {};
   const assignments = [];
-  Object.entries({ ...updates, updatedAt: new Date().toISOString() }).forEach(([key, value], index) => {
-    names[`#k${index}`] = key;
-    values[`:v${index}`] = value;
-    assignments.push(`#k${index} = :v${index}`);
-  });
+  // Skip undefined values — DynamoDB's marshaller drops them from
+  // ExpressionAttributeValues, but the SET clause would still reference the
+  // now-missing placeholder and the whole update would fail validation.
+  Object.entries({ ...updates, updatedAt: new Date().toISOString() })
+    .filter(([, value]) => value !== undefined)
+    .forEach(([key, value], index) => {
+      names[`#k${index}`] = key;
+      values[`:v${index}`] = value;
+      assignments.push(`#k${index} = :v${index}`);
+    });
   await db.send(new UpdateCommand({
     TableName: TABLE_NAME,
     Key: { tenantId, sk },
