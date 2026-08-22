@@ -129,7 +129,15 @@ async function resolveTenantConfig(tenantId, appId) {
       observabilitySources,
       github:
         connectors.github && githubSecret.token
-          ? { token: githubSecret.token, owner: app.githubRepoOwner || connectors.github.owner, repo: app.githubRepoName || connectors.github.repo }
+          ? {
+              token: githubSecret.token,
+              owner: app.githubRepoOwner || connectors.github.owner,
+              repo: app.githubRepoName || connectors.github.repo,
+              // Scopes commit lookups to this service's own directory when
+              // multiple services share one repo, so an unrelated service's
+              // commit can't get pulled into this investigation.
+              path: app.githubPath || null,
+            }
           : null,
       slack:
         connectors.slack && slackSecret.token

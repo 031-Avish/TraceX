@@ -65,7 +65,7 @@ const SECRET_FIELDS = new Set(["token", "apiKey", "appKey", "externalId"]);
 // correlation, see shopco-platform/terraform/observability.tf).
 const SIMULATE_REGISTRY = {
   "payment-service": { type: "ssm", param: "/shopco/chaos/payment", onValue: "true", offValue: "false" },
-  "acme-payment-service": { type: "ssm", param: "/acme-payment-service/ops/health-override", onValue: "true", offValue: "false" },
+  "acme-payment-service": { type: "ssm", param: "/acme-payment-service/ops/ledger-override", onValue: "true", offValue: "false" },
   "inventory-service": { type: "concurrency", functionName: "shopco-inventory-service", reservedConcurrentExecutions: 0 },
 };
 

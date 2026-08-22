@@ -20,6 +20,13 @@ class GitHubCommitsCollector {
     this.owner = config.owner || process.env.GITHUB_REPO_OWNER;
     this.repo = config.repo || process.env.GITHUB_REPO_NAME;
     this.token = config.token || process.env.GITHUB_TOKEN;
+    // Scopes get_recent_commits to just this service's own directory, when
+    // multiple services share one repo — without this, an unrelated
+    // service's recent commit can get pulled into an investigation it has
+    // nothing to do with (confirmed live: happened investigating a
+    // different service's alarm and misattributing it to another
+    // service's actual, real, but unrelated bug).
+    this.path = config.path || null;
 
     if (!this.token) {
       console.warn("  ⚠ No GitHub token configured — commit fetching will be skipped");
@@ -40,7 +47,8 @@ class GitHubCommitsCollector {
     }
 
     try {
-      const data = await this._request(`/repos/${this.owner}/${this.repo}/commits?per_page=${count}`);
+      const pathParam = this.path ? `&path=${encodeURIComponent(this.path)}` : "";
+      const data = await this._request(`/repos/${this.owner}/${this.repo}/commits?per_page=${count}${pathParam}`);
 
       const commits = data.map((c) => ({
         sha: c.sha.substring(0, 7),
