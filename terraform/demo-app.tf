@@ -283,7 +283,7 @@ resource "aws_cloudwatch_metric_alarm" "payment_5xx" {
   alarm_actions = [aws_sns_topic.incident_alarms.arn]
   ok_actions    = [aws_sns_topic.incident_alarms.arn]
 
-  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P1" }
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P1" }
 }
 
 resource "aws_cloudwatch_metric_alarm" "payment_4xx" {
@@ -300,7 +300,7 @@ resource "aws_cloudwatch_metric_alarm" "payment_4xx" {
   alarm_actions       = [aws_sns_topic.incident_alarms.arn]
   ok_actions          = [aws_sns_topic.incident_alarms.arn]
 
-  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P2" }
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P2" }
 }
 
 resource "aws_cloudwatch_metric_alarm" "payment_high_latency" {
@@ -317,7 +317,7 @@ resource "aws_cloudwatch_metric_alarm" "payment_high_latency" {
   alarm_actions       = [aws_sns_topic.incident_alarms.arn]
   ok_actions          = [aws_sns_topic.incident_alarms.arn]
 
-  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P2" }
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P2" }
 }
 
 resource "aws_cloudwatch_metric_alarm" "payment_fatal" {
@@ -334,5 +334,5 @@ resource "aws_cloudwatch_metric_alarm" "payment_fatal" {
   alarm_actions       = [aws_sns_topic.incident_alarms.arn]
   ok_actions          = [aws_sns_topic.incident_alarms.arn]
 
-  tags = { Client = "acme-corp", Service = "payment-service", Environment = "production", Severity = "P1" }
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P1" }
 }
