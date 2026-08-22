@@ -410,61 +410,69 @@ it just isn't demonstrating the self-service connector path.
 
 ## Demo Day Script
 
-### Before going on camera:
-```bash
-./deploy.sh                    # Stand up everything (~3 min)
-# Configure connectors + application in the console (once, ahead of time)
-# Wait 3-5 min for healthy traffic to establish baseline
-```
+The demo runs three scenarios, each proving a different kind of investigation — a code-level
+bug the agent finds via git history, a pure infra capacity limit with zero code correlation, and
+a downstream AWS dependency failure the agent inspects directly via a live resource-health tool.
+All three are triggered from the console's **Simulator** page (Break/Fix buttons, live-polled
+status), or directly against the config API for a terminal-driven demo:
 
-### On camera:
 ```bash
-# Terminal 1: Show healthy payment logs flowing
-aws logs tail /ecs/acme-payment-service --follow
+CONFIG_API=https://q5pdiqcs6f.execute-api.us-east-1.amazonaws.com
 
-# Terminal 2: Agent logs (empty — no incidents yet)
+# Terminal: agent logs (empty — no incidents yet)
 aws logs tail /aws/lambda/presidio-sre-agent-triage --follow
 
-# Slack: Show #noc-acme-incidents — quiet, no alerts
-
-# NOW BREAK IT:
-./break-it.sh
-
-# Narrate what's happening:
-# "I just flipped the chaos switch. A bad deployment just went out
-#  that removed null-safety checks from the payment validator..."
-
-# Terminal 1: 500 errors start appearing in logs
-# Wait 1-2 min...
-# CloudWatch alarm fires → SNS → Agent triggers automatically
-# Terminal 2: agent logs show it deciding what to check — e.g.
-#   "Turn 1: agent calling get_deployment_logs(...)"
-#   "Turn 2: agent calling get_error_logs(...)"
-#   "Turn 3: agent calling get_commit_diff({sha: 'a3f8b2c'})"
-# Slack: Triage Brief appears — root cause, timeline, cost impact,
-#   AND the investigation path the agent actually chose
-
-# "The agent decided for itself what to check — it saw the deployment
-#  happened 12 minutes before the errors started, pulled that exact
-#  commit's diff, and found the removed null check."
-
-# Reset for Q&A:
-./heal-it.sh
+# Slack: show the incident channel — quiet, no alerts
 ```
+
+### Scenario 1 — Application Errors (payment-service, ShopCo)
+A real, unguarded `currency.toUpperCase()` null-safety bug in `payment-service`'s `charge()`
+code, reached when `order-service` forwards a malformed payload.
+```bash
+curl -X POST $CONFIG_API/simulate/payment-service/break
+# ~45-90s: shopco-payment-5xx-critical alarm fires
+# ~20-40s: agent investigates — logs, metrics, deployment history, then get_recent_commits /
+#          get_commit_diff — and finds the actual commit that removed the null check
+curl -X POST $CONFIG_API/simulate/payment-service/heal
+```
+
+### Scenario 2 — Infrastructure Capacity Limit (inventory-service, ShopCo)
+Real Lambda concurrency throttle — zero code correlation, by design.
+```bash
+curl -X POST $CONFIG_API/simulate/inventory-service/break
+curl -X POST $CONFIG_API/simulate/inventory-service/heal
+```
+
+### Scenario 3 — Downstream Dependency Failure (acme-payment-service)
+A real DynamoDB table (`acme-payment-idempotency`) provisioned undersized. Break fires a
+one-shot burst-load function against that table — payment-service's own code never changes,
+and there's no code deploy to correlate against.
+```bash
+curl -X POST $CONFIG_API/simulate/acme-payment-service/break
+# self-expires after ~80s, no heal step needed
+```
+Narrate: the agent rules out a code cause (no recent deploy), then calls
+`get_dependency_resource_health` on the table's ARN — pulled from the app's own configured
+dependency metadata — to confirm the table's provisioned capacity is genuinely undersized,
+rather than just repeating the error string back.
+
+For each scenario, watch the agent logs turn-by-turn (e.g. `Turn 2: agent calling
+get_dependency_resource_health(...)`), then the Slack Triage Brief: root cause, timeline,
+financial impact, remediation, and the investigation path the agent actually chose — not a
+fixed script.
 
 ---
 
-## How the Chaos Switch Works
+## How the Chaos Toggles Work
+
+Each scenario has its own real, instantly-reversible break mechanism — not a single global
+switch. See `lambda-config-api/index.js`'s `SIMULATE_REGISTRY` for the authoritative mapping:
 
 ```
-SSM Parameter: /presidio-demo/chaos-mode
-
-  "false" (default)          "true" (after ./break-it.sh)
-  ─────────────────          ──────────────────────────────
-  Payment API → 200          Payment API → 500 (85%)
-  Healthy logs               Error logs + stack traces
-  Alarm: OK                  Alarm: ALARM → SNS → Agent
-  Slack: quiet               Slack: Triage Brief 🚨
+payment-service      → SSM /shopco/chaos/cascade (order-service sends payment-service a
+                        malformed payload, reaching the real null-safety bug)
+inventory-service     → zeroed Lambda reserved concurrency (real AWS throttle)
+acme-payment-service  → one-shot burst-load invoke against a real, undersized DynamoDB table
 ```
 
 ---
