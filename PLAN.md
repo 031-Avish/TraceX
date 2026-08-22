@@ -231,3 +231,52 @@ undermining the whole point of the exercise.
   empty/loading states, Grafana catalog entry marked coming-soon) and was deployed to the hosted
   console at `presidio-tracex-console-444455570150` / CloudFront, rebuilt with `VITE_CONFIG_API_URL`
   pointed at the real deployed config API so it works without manual setup.
+
+## Phase 5 — Second customer, an infra-only scenario, and a Simulator page
+
+Three workstreams built in parallel (subagents), then manually reconciled — parallel builds
+don't know about each other's final shape, so integration bugs are expected and were found by
+diffing the real output, not by trusting each agent's own summary.
+
+- **acme-payment-service now has its own real repo** (`github.com/031-Avish/acme-payment-service`,
+  13 commits) instead of living inside this repo's `lambda-demo-app/` — a customer's app shouldn't
+  be nested in the vendor's own product repo. Its bug is a connection-pool/retry-removal
+  misconfiguration (`v1.8.2-hotfix`), a different class from ShopCo's missing-validation bug. It
+  also independently added fake `DEPLOYMENT_STARTED`/`DEPLOYMENT_COMPLETED` log lines citing the
+  real commit, giving `get_deployment_logs` real data to find — ShopCo's scenario never had that.
+- **A genuine infra-only incident**: `shopco-inventory-service` now has a CloudWatch alarm on its
+  native `AWS/Lambda` `Throttles` metric (zero app code involved) instead of no alarm at all.
+  Breaking it means zeroing reserved concurrency for real AWS-native throttling — nothing for
+  `get_recent_commits` to find. This is the scenario that actually tests whether the agent says
+  "not a code issue" instead of forcing a GitHub explanation onto something that has none.
+- **New `/simulate/{appId}/break|heal|status` API** on `lambda-config-api` plus a **Simulator**
+  console page to drive it without touching AWS console or Terraform. `handler.js` now persists
+  the full triage brief (rootCause/timeline/financialImpact/remediation), not just
+  confidence/severity, so the UI can show real content without needing Slack API access.
+- Integration bugs found and fixed during reconciliation: the simulate registry was invoking
+  acme's old canned "fatal" scenario instead of the new self-citing one; the UI's confidence
+  display assumed a 0–1 scale instead of the 0–100 used everywhere else; the SSM path rename
+  needed to ripple through 3 scripts and an IAM statement nothing else caught.
+- **Dropped the `${BREAKING_COMMIT_SHA}` citation from ShopCo's real bug's error log**, replacing
+  it with a generic "Payment processing failed" message. The SHA-citing version is realistic
+  (real systems tag errors with the deploying commit) but was too easy a test on its own — the
+  generic version forces the agent to actually correlate a raw stack trace against recent commit
+  history with no hint, which is the harder and more convincing capability to demonstrate. Kept
+  as the sole version for now rather than A/B, since the infra-only scenario already covers the
+  "don't fabricate a cause" failure mode and the Datadog-outage scenario already covers
+  "infer from timing with no citation" — three scenarios, three different reasoning demands.
+- **Reordered + retimed ShopCo's history** so the real bad commit is the most recent meaningful
+  commit (only a trivial docs commit follows it, which correctly documents the *post-bug* response
+  shape — checked, since moving it earlier would have had it describe fields that don't exist yet).
+  Retimed relative to whenever this was last run, landing ~40 minutes before "now" — this needs
+  re-running before an actual demo if much time has passed, since the whole point is the commit
+  reads as *just happened*, not as a fixed historical date.
+- **Found and fixed a real, previously-undetected leak**: `terraform/chaos.tf` had said
+  "CHAOS SWITCHES" and "re-apply mid-demo" in its header comment since the day it was written,
+  through every earlier scrubbing pass. Full-tree + full-history grep this time, not just the
+  specific phrases flagged before — worth repeating that broader sweep periodically rather than
+  trusting a prior clean scan stays clean as more content gets added.
+- Not yet done: creating an actual Datadog monitor/metric (the `get_alarm_details_datadog`/
+  `get_service_metrics_datadog` tools currently decline gracefully rather than having anything to
+  read), running the Simulator page end-to-end from the browser (only the API layer is verified
+  by curl/direct test so far).
