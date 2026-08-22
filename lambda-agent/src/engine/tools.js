@@ -21,6 +21,7 @@ const { CloudWatchLogsCollector } = require("../collectors/cloudwatch-logs");
 const { CloudWatchMetricsCollector } = require("../collectors/cloudwatch-metrics");
 const { GitHubCommitsCollector } = require("../collectors/github-commits");
 const { DatadogCollector } = require("../collectors/datadog");
+const { AwsResourceCollector } = require("../collectors/aws-resource");
 
 // Maps a source's `provider` to an adapter exposing the 4 observability
 // operations in a common shape. `ctx` is the same per-incident scope object
@@ -97,6 +98,9 @@ function buildTools(ctx) {
   const sources = ctx.observabilitySources?.length ? ctx.observabilitySources : [{ provider: "cloudwatch" }];
   const githubAvailable = Boolean(ctx.github?.token || process.env.GITHUB_TOKEN);
   const github = githubAvailable ? new GitHubCommitsCollector(ctx.github || undefined) : null;
+  // Always available, same as CloudWatch itself — reaches AWS directly via
+  // the agent's own IAM role, no per-tenant credential to gate on.
+  const awsResource = new AwsResourceCollector(ctx.awsRegion);
 
   const observabilitySchemas = [];
   const observabilityExecutors = {};
@@ -170,6 +174,22 @@ function buildTools(ctx) {
     {
       type: "function",
       function: {
+        name: "get_dynamodb_table_health",
+        description:
+          "Inspect a DynamoDB table's own live AWS-side state directly — its billing mode/provisioned capacity, item count, and its ConsumedWriteCapacityUnits + WriteThrottleEvents CloudWatch metrics. Unlike the logs/metrics tools above (which only cover the alerting service itself), this reaches into a downstream dependency's own resource config and health. Use this when a log entry or error references a specific DynamoDB table and you need to confirm whether that table itself — not the calling service's code — is the actual bottleneck (e.g. undersized provisioned capacity causing real throttling).",
+        parameters: {
+          type: "object",
+          properties: {
+            tableName: { type: "string", description: "The DynamoDB table name to inspect." },
+            windowMinutes: { type: "integer", description: "How far back to pull capacity/throttle metrics, in minutes. Default 15." },
+          },
+          required: ["tableName"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
         name: "submit_triage_brief",
         description:
           "Finalize the investigation and submit the structured incident triage brief. Call this once — and only once — you have enough evidence to state a root cause. Do not call any other tool after this.",
@@ -214,6 +234,7 @@ function buildTools(ctx) {
           get_commit_diff: (args) => github.getCommitDiff(args.sha),
         }
       : {}),
+    get_dynamodb_table_health: (args) => awsResource.getDynamoDbTableHealth(args.tableName, args.windowMinutes || 15),
   };
 
   return { schemas, executors };

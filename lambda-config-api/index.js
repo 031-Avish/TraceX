@@ -64,13 +64,17 @@ const SECRET_FIELDS = new Set(["token", "apiKey", "appKey", "externalId"]);
 // ("concurrency"). inventory-service uses "concurrency" on its own
 // function (a pure infra/capacity scenario with zero code correlation —
 // see shopco-platform/terraform/observability.tf). acme-payment-service
-// also uses "concurrency", but on a *different* function
-// (acme-fraud-check-service) that it calls synchronously on every
-// request — the app's own code and permissions are fine; the downstream
-// dependency it invokes is what gets throttled.
+// uses "invoke": every payment writes an idempotency record to a real,
+// deliberately low-provisioned-capacity DynamoDB table
+// (acme-payment-idempotency); breaking it fires a one-shot burst-load
+// Lambda (acme-idempotency-load-generator) against that same table for
+// ~80s, causing genuine ProvisionedThroughputExceededException on
+// concurrent writes — including the app's own — with zero git history
+// correlation (no deploy caused it) and no self-explanatory permission
+// error to read off. It self-expires, so there's no heal step to send.
 const SIMULATE_REGISTRY = {
   "payment-service": { type: "ssm", param: "/shopco/chaos/payment", onValue: "true", offValue: "false" },
-  "acme-payment-service": { type: "concurrency", functionName: "acme-fraud-check-service", reservedConcurrentExecutions: 0 },
+  "acme-payment-service": { type: "invoke", functionName: "acme-idempotency-load-generator", payload: {} },
   "inventory-service": { type: "concurrency", functionName: "shopco-inventory-service", reservedConcurrentExecutions: 0 },
 };
 
