@@ -53,7 +53,7 @@ const CORS_HEADERS = {
 };
 
 const CONNECTOR_TYPES = new Set(["cloudwatch", "github", "slack", "datadog"]);
-const SECRET_FIELDS = new Set(["token", "apiKey", "appKey"]);
+const SECRET_FIELDS = new Set(["token", "apiKey", "appKey", "externalId"]);
 
 // ── Simulate incident registry ────────────────────────────────
 // Small hardcoded map from appId → how to break/heal it. Each demo

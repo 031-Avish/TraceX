@@ -2,8 +2,10 @@ export const CONNECTOR_CATALOG = [
   // ── Observability ───────────────────────────────────────────────────────────
   // CloudWatch uses the Lambda's IAM role — no credentials to store. The region
   // field is informational and matches what was set at deploy time.
-  { type: "cloudwatch", name: "AWS CloudWatch", icon: "☁", category: "Observability", available: true, description: "Logs, metrics, and alarms via the Lambda's IAM role. No credentials required — access is scoped to your AWS account.", fields: [
+  { type: "cloudwatch", name: "AWS CloudWatch", icon: "☁", category: "Observability", available: true, description: "Logs, metrics, and alarms via IAM role assumption — TraceX never sees long-lived AWS credentials. In this demo, TraceX and the monitored account are the same account, so the agent's own execution role is used directly; a real deployment has the customer create a role in their own account that trusts TraceX's account ID, scoped by an external ID.", fields: [
     { key: "region", label: "AWS region", placeholder: "us-east-1" },
+    { key: "roleArn", label: "IAM role ARN (production cross-account path)", placeholder: "arn:aws:iam::<customer-account-id>:role/TraceXReadOnly" },
+    { key: "externalId", label: "External ID", type: "password", placeholder: "shared secret set on the trust policy", secret: true },
   ] },
   { type: "datadog", name: "Datadog", icon: "D", category: "Observability", available: true, description: "Investigate Datadog logs, metrics, and monitors through one scoped connection.", fields: [
     { key: "site", label: "Datadog site", type: "select", defaultValue: "us1", options: [["us1", "US1"], ["us3", "US3"], ["us5", "US5"], ["eu1", "EU1"], ["ap1", "AP1"], ["ap2", "AP2"], ["us1_fed", "US1-FED"]] },
