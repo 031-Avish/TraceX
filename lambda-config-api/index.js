@@ -73,7 +73,18 @@ const SECRET_FIELDS = new Set(["token", "apiKey", "appKey", "externalId"]);
 // correlation (no deploy caused it) and no self-explanatory permission
 // error to read off. It self-expires, so there's no heal step to send.
 const SIMULATE_REGISTRY = {
-  "payment-service": { type: "ssm", param: "/shopco/chaos/payment", onValue: "true", offValue: "false" },
+  // /shopco/chaos/payment is a DIFFERENT, unrelated toggle read directly by
+  // payment-service itself — when true, it short-circuits with a fake,
+  // self-explanatory "Payment gateway unreachable (simulated outage)"
+  // message, bypassing the app's real code entirely. That is NOT this
+  // section's scenario ("Code-level bugs — the agent finds the actual bad
+  // commit") and must never be wired here. /shopco/chaos/cascade is read by
+  // order-service, which sends a malformed {amount:null,currency:null}
+  // payload to payment-service — that's what actually reaches the real,
+  // git-history-correlated null-safety bug in payment-service's own
+  // charge() code (see shopco-platform/services/order-service/index.js and
+  // payment-service/index.js).
+  "payment-service": { type: "ssm", param: "/shopco/chaos/cascade", onValue: "true", offValue: "false" },
   "acme-payment-service": { type: "invoke", functionName: "acme-idempotency-load-generator", payload: {} },
   "inventory-service": { type: "concurrency", functionName: "shopco-inventory-service", reservedConcurrentExecutions: 0 },
 };

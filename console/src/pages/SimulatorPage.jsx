@@ -6,18 +6,41 @@ import { listApplications, simulateBreak, simulateHeal, simulateStatus } from ".
 const POLL_INTERVAL_MS = 5000;
 const RECOVERED_RESET_MS = 4500;
 
-// simulateStatus (lambda-config-api/index.js) queries the most recent
-// INCIDENT#<alarmName># item unconditionally — it has no way to tell a
-// fresh incident from THIS "Break" click apart from a leftover record from
-// a previous, already-finished run on the same alarm. Its response now
-// includes that item's real `startedAt` (ISO string, or null if no incident
-// exists yet), so the client can correlate deterministically: only trust a
-// polled incident as belonging to this run if its startedAt is at or after
-// the moment "Break" was clicked. CLOCK_SKEW_BUFFER_MS absorbs the gap
-// between the client's Date.now() and DynamoDB's/CloudWatch's own clocks —
-// not a guess at alarm-evaluation latency, just clock-skew slack. See
-// seenInvestigatingRef below for the second, independent guard.
+// simulateStatus (lambda-config-api/index.js) returns the CURRENT, live
+// alarmState plus the most recent incident record for that alarm
+// (incidentState/startedAt/confidence/severity — startedAt is ISO or null).
+// The card's phase is derived fresh from that pair on every single poll
+// (see computePhase below) — never from locally-remembered React state —
+// so a page refresh, a remount from navigating away and back, or opening
+// the page in a second tab all show the true current state immediately,
+// instead of freezing on "Healthy" or on a stale guard that can never
+// un-stick itself. The one piece of client memory that's genuinely needed
+// is "did I just click Break and am I still waiting for MY alarm to fire"
+// — that's UX polish (so the wait doesn't flash an old recovered/healthy
+// state first), not a correctness guard, and it's persisted to
+// localStorage (see BREAK_STORAGE_KEY) specifically so it survives a
+// refresh mid-wait instead of losing track and looking stuck.
 const CLOCK_SKEW_BUFFER_MS = 10000;
+const MAX_BREAK_WAIT_MS = 5 * 60 * 1000; // safety cap — never override longer than this
+const BREAK_STORAGE_PREFIX = "tracex-sim-break-";
+
+function loadBreakClickedAt(appId) {
+  try {
+    const raw = localStorage.getItem(BREAK_STORAGE_PREFIX + appId);
+    return raw ? Number(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function saveBreakClickedAt(appId, value) {
+  try {
+    if (value === null) localStorage.removeItem(BREAK_STORAGE_PREFIX + appId);
+    else localStorage.setItem(BREAK_STORAGE_PREFIX + appId, String(value));
+  } catch {
+    // localStorage unavailable (private mode, etc.) — the override just
+    // won't survive a refresh; live-derived state still works correctly.
+  }
+}
 
 // The three scenario groups the product plan calls for. Each app card is
 // slotted into exactly one of these by appId; anything registered outside
@@ -66,71 +89,67 @@ const INVESTIGATING_HINTS = [
   "Drafting root-cause hypothesis…",
 ];
 
-// Maps the raw /simulate/{appId}/status response onto the card's display phase.
-// Kept as a pure function so the polling effect below stays easy to follow.
+// Maps the raw /simulate/{appId}/status response onto the card's display
+// phase — a PURE function of live backend data only (alarmState is
+// CloudWatch's real-time current state; it's the anchor of truth here).
+// This never reads or depends on locally-remembered React state, so it's
+// correct immediately on mount, after a refresh, after navigating away and
+// back, or in a second tab — none of which used to work (the card used to
+// initialize to "healthy" unconditionally and only start polling once a
+// *local* phase change had already happened, so a real, currently-firing
+// incident was invisible until you personally clicked Break in that exact
+// browser session).
 //
-// incidentState is written by lambda-agent/src/incidents/incident-store.js and
-// lambda-agent/src/handler.js. Every value either of those files ever sets as
-// `state:` must have an explicit branch below — falling through to `return
-// current` unhandled (as used to happen for "alerting") silently freezes the
-// card instead of showing real progress. Known values, confirmed by grepping
-// both files: alerting, investigating, slack_alert_failed, reported,
-// report_failed, recovered.
-function nextPhase(current, data) {
-  if (!data) return current;
-  const { alarmState, incidentState, confidence, severity } = data;
+// incidentState is written by lambda-agent/src/incidents/incident-store.js
+// and lambda-agent/src/handler.js — every value either file ever sets as
+// `state:` must have an explicit branch below (confirmed by grepping both:
+// alerting, investigating, slack_alert_failed, reported, report_failed,
+// recovered). While alarmState is ALARM, incidentState is authoritative
+// (a real, live incident — trust it directly, including an "alerting" or
+// absent record, which just means the agent hasn't posted progress yet).
+// Once alarmState drops to OK, only "recovered" is a state that's still
+// consistent with that; any other incidentState at that point is a
+// leftover terminal value from an older, fully-finished cycle and the
+// service is simply healthy right now.
+function computePhase(data) {
+  if (!data) return { phase: "healthy", confidence: null, severity: null, error: null, startedAt: null };
+  const { alarmState, incidentState, confidence, severity, startedAt } = data;
 
-  switch (incidentState) {
-    case "recovered":
-      return { phase: "recovered", confidence: null, severity: null, error: null };
-
-    case "reported":
-      return { phase: "reported", confidence, severity, error: null };
-
-    case "report_failed":
-      // The agent finished investigating but couldn't post the report to
-      // Slack even after handler.js's one retry — a real, terminal failure,
-      // not "nothing happening". Surface it instead of hiding it.
-      return {
-        phase: "reported",
-        confidence,
-        severity,
-        error: "Investigation finished, but posting the report to Slack failed.",
-      };
-
-    case "investigating":
-      return { phase: "investigating", confidence: null, severity: null, error: null };
-
-    case "slack_alert_failed":
-      // Only the *initial* alert failed to post — handler.js still runs the
-      // agent and retries the post before the final report, so this is
-      // usually transient. Keep showing "investigating" (it genuinely is
-      // running) but flag the hiccup rather than staying silent about it.
-      return {
-        phase: "investigating",
-        confidence: null,
-        severity: null,
-        error: "Initial Slack alert failed — the agent is investigating anyway and will retry the post.",
-      };
-
-    case "alerting":
-      // Incident record was just created: the alarm has fired but the agent
-      // hasn't posted any progress yet. Explicitly treated the same as the
-      // not-yet-set case below — keep showing "Alert Fired / waiting" rather
-      // than silently falling through with no matching branch.
-      return current;
-
-    default:
-      // incidentState is null/undefined — no incident recorded yet.
-      if (alarmState === "ALARM") {
-        return { phase: "investigating", confidence: null, severity: null, error: null };
-      }
-      // alarmState is OK/INSUFFICIENT_DATA/unknown — keep whatever we're
-      // currently showing (either still "healthy", or the optimistic
-      // "breaking" state right after clicking Break, waiting for CloudWatch
-      // to catch up).
-      return current;
+  if (alarmState === "ALARM") {
+    switch (incidentState) {
+      case "reported":
+        return { phase: "reported", confidence, severity, error: null, startedAt };
+      case "report_failed":
+        return {
+          phase: "reported",
+          confidence,
+          severity,
+          error: "Investigation finished, but posting the report to Slack failed.",
+          startedAt,
+        };
+      case "investigating":
+        return { phase: "investigating", confidence: null, severity: null, error: null, startedAt };
+      case "slack_alert_failed":
+        return {
+          phase: "investigating",
+          confidence: null,
+          severity: null,
+          error: "Initial Slack alert failed — the agent is investigating anyway and will retry the post.",
+          startedAt,
+        };
+      default:
+        // "alerting", a stale "recovered" from an earlier cycle, or no
+        // incident record synced yet — the alarm is live right now
+        // regardless, so show the waiting state.
+        return { phase: "breaking", confidence: null, severity: null, error: null, startedAt };
+    }
   }
+
+  // alarmState is OK / INSUFFICIENT_DATA / null — no active alarm right now.
+  if (incidentState === "recovered") {
+    return { phase: "recovered", confidence: null, severity: null, error: null, startedAt };
+  }
+  return { phase: "healthy", confidence: null, severity: null, error: null, startedAt: null };
 }
 
 function Stepper({ phase, confidence, severity, investigatingSeconds, breakingSeconds }) {
@@ -192,66 +211,68 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
   const [healSeconds, setHealSeconds] = useState(0);
   const intervalRef = useRef(null);
   const resetTimerRef = useRef(null);
-  // When this run's "Break" was clicked, and whether we've locally observed
-  // this run actually reach "investigating" — the two-part stale-incident
-  // guard described above CLOCK_SKEW_BUFFER_MS. Both reset on a fresh Break
-  // click and when the card settles back to "healthy".
-  const breakClickedAtRef = useRef(null);
-  const seenInvestigatingRef = useRef(false);
-
-  const polling = sim.phase !== "healthy";
+  // When "Break" was clicked, persisted to localStorage (not just a React
+  // ref) so it survives a page refresh or navigating away and back mid-wait
+  // — hydrated on mount so a reload during the ~45-90s wait still shows
+  // "waiting for alarm" instead of losing track and looking stuck or, worse,
+  // flashing an older unrelated recovered/healthy state. This is UX polish
+  // only: computePhase() above is correct with or without it, since it's a
+  // pure function of live alarmState/incidentState.
+  const breakClickedAtRef = useRef(loadBreakClickedAt(app.appId));
+  // Which incident (by startedAt) we've already shown+settled a "Recovered"
+  // beat for — so a fully-finished old incident's terminal "recovered"
+  // record (which never changes once written) doesn't re-flash every time
+  // it's polled after we've already settled back to "healthy" for it.
+  const acknowledgedRecoveredRef = useRef(null);
 
   const poll = useCallback(() => {
     simulateStatus(apiUrl, tenantId, app.appId)
       .then((data) => {
-        setSim((current) => {
-          const candidate = nextPhase(current, data);
-          if (candidate.phase === current.phase) return { ...current, ...candidate };
+        let computed = computePhase(data);
 
-          const advancesPastBreaking =
-            candidate.phase === "investigating" || candidate.phase === "reported" || candidate.phase === "recovered";
+        const clickedAt = breakClickedAtRef.current;
+        const withinOverrideWindow = clickedAt !== null && Date.now() - clickedAt < MAX_BREAK_WAIT_MS;
+        if (withinOverrideWindow && (computed.phase === "healthy" || computed.phase === "recovered")) {
+          const startedAtMs = computed.startedAt ? new Date(computed.startedAt).getTime() : null;
+          const isOurIncident = startedAtMs !== null && startedAtMs >= clickedAt - CLOCK_SKEW_BUFFER_MS;
+          if (!isOurIncident) {
+            // Just clicked Break and still waiting for CloudWatch to catch
+            // up — don't let an older/unrelated recovered-or-absent record
+            // make it look like the click did nothing.
+            computed = { phase: "breaking", confidence: null, severity: null, error: null, startedAt: null };
+          }
+        }
+        if (clickedAt !== null && !withinOverrideWindow) {
+          // Safety cap elapsed (5 min) with no real progress ever seen —
+          // stop overriding, just show whatever's actually true.
+          breakClickedAtRef.current = null;
+          saveBreakClickedAt(app.appId, null);
+        }
 
-          // Only the branches driven by an actual INCIDENT# record
-          // (data.incidentState truthy) can be stale — the "investigating"
-          // reached via a bare live alarmState === "ALARM" with no incident
-          // record yet (see nextPhase's default branch) has nothing to
-          // correlate against and nothing to be stale about, so it's trusted
-          // directly.
-          if (advancesPastBreaking && data?.incidentState) {
-            const startedAtMs = data.startedAt ? new Date(data.startedAt).getTime() : null;
-            const isFreshIncident =
-              startedAtMs !== null &&
-              breakClickedAtRef.current !== null &&
-              startedAtMs >= breakClickedAtRef.current - CLOCK_SKEW_BUFFER_MS;
-            if (!isFreshIncident) {
-              // This INCIDENT# record started before this run's "Break" click
-              // (or has no startedAt at all) — a leftover from a previous,
-              // already-finished run on this alarm. Keep showing the waiting
-              // state instead of jumping straight to a stale result.
-              return current;
-            }
-          }
-          if ((candidate.phase === "reported" || candidate.phase === "recovered") && !seenInvestigatingRef.current) {
-            // Defense in depth, independent of the startedAt check above:
-            // never locally observed this run pass through "investigating" —
-            // don't trust a "reported"/"recovered" signal regardless.
-            return current;
-          }
-          if (candidate.phase === "investigating") seenInvestigatingRef.current = true;
-          return { ...current, ...candidate };
-        });
+        if (computed.phase === "recovered" && acknowledgedRecoveredRef.current === computed.startedAt) {
+          // Already showed + settled this exact incident's recovery beat —
+          // its terminal record never changes, so without this it would
+          // re-flash "Recovered" on every poll forever instead of staying
+          // settled at "Healthy".
+          setSim({ phase: "healthy", confidence: null, severity: null, error: null });
+          return;
+        }
+        setSim(computed);
       })
       .catch((e) => showToast(e.message, "error"));
   }, [apiUrl, tenantId, app.appId, showToast]);
 
+  // Always polling, from mount to unmount, regardless of local phase — this
+  // is what makes the card show true current state on load/refresh instead
+  // of only ever reacting to a Break click made in this exact session.
   useEffect(() => {
-    if (!polling) return undefined;
+    poll();
     intervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
     return () => {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
     };
-  }, [polling, poll]);
+  }, [poll]);
 
   // Ticks once a second only while "Agent Investigating" is the active step,
   // purely so that stage can visibly show it's alive during the real 20-40s
@@ -294,17 +315,21 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
   }, [healTriggered, sim.phase]);
 
   // "Recovered" is a brief success beat — reset back to "Healthy" a few
-  // seconds after we see it so the card is ready for the next run.
+  // seconds after we see it so the card is ready for the next run. Marks
+  // this specific incident (by startedAt) as acknowledged first, so the
+  // next poll (which will still see the same terminal "recovered" record)
+  // doesn't immediately undo the reset.
   useEffect(() => {
     if (sim.phase !== "recovered") return undefined;
     resetTimerRef.current = setTimeout(() => {
+      acknowledgedRecoveredRef.current = sim.startedAt;
       setSim({ phase: "healthy", confidence: null, severity: null, error: null });
       setHealTriggered(false);
       breakClickedAtRef.current = null;
-      seenInvestigatingRef.current = false;
+      saveBreakClickedAt(app.appId, null);
     }, RECOVERED_RESET_MS);
     return () => clearTimeout(resetTimerRef.current);
-  }, [sim.phase]);
+  }, [sim.phase, sim.startedAt, app.appId]);
 
   const handleBreak = async () => {
     const ok = await confirm(
@@ -315,8 +340,9 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
       setBreaking(true);
       await simulateBreak(apiUrl, app.appId);
       showToast(`Synthetic incident triggered for ${app.appId}`, "ok");
-      breakClickedAtRef.current = Date.now();
-      seenInvestigatingRef.current = false;
+      const now = Date.now();
+      breakClickedAtRef.current = now;
+      saveBreakClickedAt(app.appId, now);
       setSim({ phase: "breaking", confidence: null, severity: null, error: null });
       setHealTriggered(false);
     } catch (err) {
