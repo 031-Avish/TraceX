@@ -61,11 +61,16 @@ const SECRET_FIELDS = new Set(["token", "apiKey", "appKey", "externalId"]);
 // reads on every request ("ssm"), a one-shot payload sent directly to a
 // Lambda ("invoke", no heal step — it's not a persistent state flip), or
 // a real AWS throttle induced by zeroing reserved concurrency
-// ("concurrency" — the pure infra/capacity scenario with zero code
-// correlation, see shopco-platform/terraform/observability.tf).
+// ("concurrency"). inventory-service uses "concurrency" on its own
+// function (a pure infra/capacity scenario with zero code correlation —
+// see shopco-platform/terraform/observability.tf). acme-payment-service
+// also uses "concurrency", but on a *different* function
+// (acme-fraud-check-service) that it calls synchronously on every
+// request — the app's own code and permissions are fine; the downstream
+// dependency it invokes is what gets throttled.
 const SIMULATE_REGISTRY = {
   "payment-service": { type: "ssm", param: "/shopco/chaos/payment", onValue: "true", offValue: "false" },
-  "acme-payment-service": { type: "ssm", param: "/acme-payment-service/ops/ledger-override", onValue: "true", offValue: "false" },
+  "acme-payment-service": { type: "concurrency", functionName: "acme-fraud-check-service", reservedConcurrentExecutions: 0 },
   "inventory-service": { type: "concurrency", functionName: "shopco-inventory-service", reservedConcurrentExecutions: 0 },
 };
 
