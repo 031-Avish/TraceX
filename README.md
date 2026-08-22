@@ -243,11 +243,11 @@ follow-up reply when the alarm clears.
 
 **Application-error incident (code bug, git-correlated):**
 
-<!-- TODO: add screenshot — Slack triage brief for the payment-service code-bug scenario -->
+![Slack triage brief for the payment-service code-bug scenario](./docs/screenshots/slack-app-error-triage-brief.png)
 
 **Infrastructure incident (downstream dependency, zero code correlation):**
 
-<!-- TODO: add screenshot — Slack triage brief for the acme-payment-service dependency scenario -->
+![Slack triage brief for the acme-payment-service dependency scenario](./docs/screenshots/slack-infra-dependency-triage-brief.png)
 
 The agent that produces these briefs lives in [`lambda-agent/`](./lambda-agent) — see
 [Project Structure](#project-structure) below for what's in it.
