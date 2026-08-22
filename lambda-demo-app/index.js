@@ -34,9 +34,66 @@ async function isChaosMode() {
 }
 
 exports.handler = async (event) => {
+  let requestBody = {};
+  try {
+    requestBody = typeof event?.body === "string" ? JSON.parse(event.body) : (event?.body || event || {});
+  } catch {
+    requestBody = {};
+  }
+
+  const testScenario = requestBody.testScenario;
   const chaos = await isChaosMode();
   const traceId = `trace-${Math.random().toString(36).substr(2, 16)}`;
   const amount = (Math.random() * 500 + 10).toFixed(2);
+
+  // Deterministic alarm test cases. These are intentionally opt-in and make it
+  // possible to prove each CloudWatch metric/alarm path without random traffic.
+  if (testScenario === "4xx") {
+    console.log(JSON.stringify({
+      level: "WARN",
+      timestamp: new Date().toISOString(),
+      service: "payment-service",
+      endpoint: "/api/payments",
+      method: "POST",
+      statusCode: 400,
+      responseTimeMs: 18,
+      traceId,
+      error: { type: "ValidationError", message: "Payment currency is required" },
+      message: "Payment request rejected by validation",
+    }));
+    return { statusCode: 400, body: JSON.stringify({ status: "error", message: "Payment currency is required" }) };
+  }
+
+  if (testScenario === "latency") {
+    console.log(JSON.stringify({
+      level: "WARN",
+      timestamp: new Date().toISOString(),
+      service: "payment-service",
+      endpoint: "/api/payments",
+      method: "POST",
+      statusCode: 200,
+      responseTimeMs: 1200,
+      traceId,
+      message: "Payment processed with abnormal downstream latency",
+    }));
+    return { statusCode: 200, body: JSON.stringify({ status: "success", amount }) };
+  }
+
+  if (testScenario === "fatal") {
+    console.log(JSON.stringify({
+      level: "FATAL",
+      timestamp: new Date().toISOString(),
+      service: "payment-service",
+      endpoint: "/api/payments",
+      method: "POST",
+      statusCode: 500,
+      responseTimeMs: 800,
+      traceId,
+      error: { type: "DatabaseUnavailable", message: "Payment ledger is unavailable" },
+      message: "CRITICAL: Payment processing cannot continue",
+    }));
+    return { statusCode: 500, body: JSON.stringify({ status: "error", message: "Payment processing unavailable" }) };
+  }
 
   // ════════════ HEALTHY MODE ════════════
   if (!chaos) {

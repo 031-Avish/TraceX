@@ -5,6 +5,7 @@ import { ToastProvider } from "./context/ToastContext.jsx";
 import OverviewPage from "./pages/OverviewPage.jsx";
 import ConnectorsPage from "./pages/ConnectorsPage.jsx";
 import ApplicationsPage from "./pages/ApplicationsPage.jsx";
+import SimulatorPage from "./pages/SimulatorPage.jsx";
 import SettingsPage from "./pages/SettingsPage.jsx";
 
 function TopBar() {
@@ -18,6 +19,7 @@ function TopBar() {
         </NavLink>
         <NavLink to="/connectors">Connectors</NavLink>
         <NavLink to="/applications">Applications</NavLink>
+        <NavLink to="/simulator">◈ Simulator</NavLink>
         <NavLink to="/settings">Settings</NavLink>
       </nav>
       <div className="tenant-pill">
@@ -39,6 +41,7 @@ export default function App() {
                 <Route path="/" element={<OverviewPage />} />
                 <Route path="/connectors" element={<ConnectorsPage />} />
                 <Route path="/applications" element={<ApplicationsPage />} />
+                <Route path="/simulator" element={<SimulatorPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

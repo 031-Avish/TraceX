@@ -3,18 +3,90 @@
 // The agent decides WHICH of these to use and WHEN it has enough evidence —
 // this file only defines what's available and how to execute each one.
 //
-// The tool list is built dynamically per tenant/app. Observability tools keep
-// stable names while their executors route to CloudWatch, Datadog, or a future
-// provider adapter. GitHub tools are only offered when this
-// tenant actually has GitHub credentials configured — via the connector
-// registry, or the env var fallback. A tenant that hasn't connected GitHub
-// simply never sees get_recent_commits/get_commit_diff as an option, instead
-// of the agent "choosing" them and burning a turn on a guaranteed failure.
+// The tool list is built dynamically per tenant/app. Every observability
+// source the app has configured+ready (CloudWatch always, plus Datadog or any
+// future provider when connected) gets its own provider-suffixed tool variant
+// — e.g. get_error_logs_cloudwatch and get_error_logs_datadog can both be
+// offered at once. The agent picks which source(s) to call per incident,
+// including calling more than one for corroboration; nothing upstream forces
+// a single provider choice. Adding a new provider means adding one entry to
+// PROVIDER_ADAPTERS below — the schema/executor generation is generic.
+// GitHub tools are only offered when this tenant actually has GitHub
+// credentials configured — via the connector registry, or the env var
+// fallback. A tenant that hasn't connected GitHub simply never sees
+// get_recent_commits/get_commit_diff as an option, instead of the agent
+// "choosing" them and burning a turn on a guaranteed failure.
 
 const { CloudWatchLogsCollector } = require("../collectors/cloudwatch-logs");
 const { CloudWatchMetricsCollector } = require("../collectors/cloudwatch-metrics");
 const { GitHubCommitsCollector } = require("../collectors/github-commits");
 const { DatadogCollector } = require("../collectors/datadog");
+const { AwsResourceCollector } = require("../collectors/aws-resource");
+
+// Maps a source's `provider` to an adapter exposing the 4 observability
+// operations in a common shape. `ctx` is the same per-incident scope object
+// buildTools receives; `source` is that provider's own entry from
+// ctx.observabilitySources (credentials/queries specific to it).
+const PROVIDER_ADAPTERS = {
+  cloudwatch: (ctx) => {
+    const logs = new CloudWatchLogsCollector(ctx.awsRegion);
+    const metrics = new CloudWatchMetricsCollector(ctx.awsRegion);
+    return {
+      label: "CloudWatch",
+      getRecentErrorLogs: (windowMinutes) => logs.getRecentErrorLogs(ctx.logGroupName, windowMinutes),
+      getDeploymentLogs: (windowMinutes) => logs.getDeploymentLogs(ctx.logGroupName, windowMinutes),
+      getServiceMetrics: (windowMinutes) =>
+        metrics.getServiceMetrics({
+          namespace: ctx.metricNamespace,
+          metricName: ctx.metricName,
+          dimensions: ctx.metricDimensions,
+          statistic: ctx.metricStatistic,
+          windowMinutes,
+        }),
+      getAlarmDetails: () => metrics.getAlarmDetails(ctx.alarmName),
+    };
+  },
+  datadog: (ctx, source) => {
+    const dd = new DatadogCollector(source);
+    return {
+      label: "Datadog",
+      getRecentErrorLogs: (windowMinutes) => dd.getRecentErrorLogs(windowMinutes),
+      getDeploymentLogs: (windowMinutes) => dd.getDeploymentLogs(windowMinutes),
+      getServiceMetrics: (windowMinutes) => dd.getServiceMetrics(windowMinutes),
+      getAlarmDetails: () => dd.getAlarmDetails(),
+    };
+  },
+};
+
+// One entry per observability operation: the stable name suffix, default
+// time-window param (null = no window param, e.g. alarm details), and a
+// description template — {provider} is filled in per source.
+const OBSERVABILITY_OPS = [
+  {
+    suffix: "error_logs",
+    defaultWindow: 15,
+    description: "Fetch recent ERROR/FATAL/5xx log entries for the affected service from {provider}. Use this first for any error-rate or exception-based incident.",
+    call: (adapter, windowMinutes) => adapter.getRecentErrorLogs(windowMinutes),
+  },
+  {
+    suffix: "deployment_logs",
+    defaultWindow: 30,
+    description: "Fetch recent deployment/release events for the affected service from {provider}. Use this to check whether a deploy happened shortly before the incident started.",
+    call: (adapter, windowMinutes) => adapter.getDeploymentLogs(windowMinutes),
+  },
+  {
+    suffix: "service_metrics",
+    defaultWindow: 30,
+    description: "Fetch {provider}'s metric time series for the affected service. Use this to see how the error rate trended over time, not just individual log lines.",
+    call: (adapter, windowMinutes) => adapter.getServiceMetrics(windowMinutes),
+  },
+  {
+    suffix: "alarm_details",
+    defaultWindow: null,
+    description: "Fetch {provider}'s alert or monitor details for the affected service, including current state and query/threshold context.",
+    call: (adapter) => adapter.getAlarmDetails(),
+  },
+];
 
 /**
  * Build the tool list + executor map for one incident's investigation.
@@ -23,75 +95,50 @@ const { DatadogCollector } = require("../collectors/datadog");
  * for a different tenant's log group.
  */
 function buildTools(ctx) {
-  const logs = new CloudWatchLogsCollector(ctx.awsRegion);
-  const metrics = new CloudWatchMetricsCollector(ctx.awsRegion);
-  const provider = ctx.observability?.provider || "cloudwatch";
-  const datadog = provider === "datadog" ? new DatadogCollector(ctx.observability) : null;
-  const unavailable = provider === "unavailable" ? ctx.observability.error : null;
+  const sources = ctx.observabilitySources?.length ? ctx.observabilitySources : [{ provider: "cloudwatch" }];
   const githubAvailable = Boolean(ctx.github?.token || process.env.GITHUB_TOKEN);
   const github = githubAvailable ? new GitHubCommitsCollector(ctx.github || undefined) : null;
+  // Always available, same as CloudWatch itself — reaches AWS directly via
+  // the agent's own IAM role, no per-tenant credential to gate on.
+  const awsResource = new AwsResourceCollector(ctx.awsRegion);
+
+  const observabilitySchemas = [];
+  const observabilityExecutors = {};
+
+  for (const source of sources) {
+    const buildAdapter = PROVIDER_ADAPTERS[source.provider];
+    if (!buildAdapter) continue; // unknown/unimplemented provider — skip rather than offer a tool that can't execute
+    const adapter = buildAdapter(ctx, source);
+    const suffix = source.provider;
+
+    for (const op of OBSERVABILITY_OPS) {
+      const name = `get_${op.suffix}_${suffix}`;
+      observabilitySchemas.push({
+        type: "function",
+        function: {
+          name,
+          description: op.description.replace("{provider}", adapter.label),
+          parameters: {
+            type: "object",
+            properties:
+              op.defaultWindow === null
+                ? {}
+                : {
+                    windowMinutes: {
+                      type: "integer",
+                      description: `How far back to look, in minutes. Default ${op.defaultWindow}.`,
+                    },
+                  },
+          },
+        },
+      });
+      observabilityExecutors[name] = (args) =>
+        op.call(adapter, op.defaultWindow === null ? undefined : args.windowMinutes || op.defaultWindow);
+    }
+  }
 
   const allSchemas = [
-    {
-      type: "function",
-      function: {
-        name: "get_error_logs",
-        description:
-          "Fetch recent ERROR/FATAL/5xx log entries for the affected service. Use this first for any error-rate or exception-based incident.",
-        parameters: {
-          type: "object",
-          properties: {
-            windowMinutes: {
-              type: "integer",
-              description: "How far back to look, in minutes. Default 15.",
-            },
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "get_deployment_logs",
-        description:
-          "Fetch recent deployment/release events for the affected service. Use this to check whether a deploy happened shortly before the incident started.",
-        parameters: {
-          type: "object",
-          properties: {
-            windowMinutes: {
-              type: "integer",
-              description: "How far back to look, in minutes. Default 30.",
-            },
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "get_service_metrics",
-        description:
-          "Fetch the configured observability provider's metric time series for the affected service. Use this to see how the error rate trended over time, not just individual log lines.",
-        parameters: {
-          type: "object",
-          properties: {
-            windowMinutes: {
-              type: "integer",
-              description: "How far back to look, in minutes. Default 30.",
-            },
-          },
-        },
-      },
-    },
-    {
-      type: "function",
-      function: {
-        name: "get_alarm_details",
-        description:
-          "Fetch the configured observability provider's alert or monitor details, including current state and query/threshold context.",
-        parameters: { type: "object", properties: {} },
-      },
-    },
+    ...observabilitySchemas,
     {
       type: "function",
       function: {
@@ -121,6 +168,22 @@ function buildTools(ctx) {
             sha: { type: "string", description: "The commit SHA (short or full) to inspect." },
           },
           required: ["sha"],
+        },
+      },
+    },
+    {
+      type: "function",
+      function: {
+        name: "get_dependency_resource_health",
+        description:
+          "Inspect a downstream AWS resource's own live state directly by ARN — not the alerting service's logs, not its own alarm. Supports DynamoDB tables (billing mode/provisioned capacity, item count, ConsumedWriteCapacityUnits + WriteThrottleEvents), Lambda functions (state, reserved concurrency, Throttles/Invocations/Errors), and SQS queues (queue depth, in-flight count, oldest-message age, NumberOfMessagesSent). Use this whenever a log entry, error, or the incident's known-dependency ARN (given in the incident summary, if configured) points at a specific AWS resource and you need to confirm whether THAT resource — not the alerting service's own code — is the actual bottleneck.",
+        parameters: {
+          type: "object",
+          properties: {
+            resourceArn: { type: "string", description: "Full ARN of the resource to inspect, e.g. arn:aws:dynamodb:us-east-1:123456789012:table/my-table, arn:aws:lambda:us-east-1:123456789012:function:my-fn, or arn:aws:sqs:us-east-1:123456789012:my-queue." },
+            windowMinutes: { type: "integer", description: "How far back to pull capacity/throttle/error metrics, in minutes. Default 15." },
+          },
+          required: ["resourceArn"],
         },
       },
     },
@@ -164,24 +227,14 @@ function buildTools(ctx) {
   const schemas = allSchemas.filter((s) => githubAvailable || !GITHUB_TOOL_NAMES.has(s.function.name));
 
   const executors = {
-    get_error_logs: (args) => unavailable ? Promise.resolve({ success: false, error: unavailable }) : datadog
-      ? datadog.getRecentErrorLogs(args.windowMinutes || 15)
-      : logs.getRecentErrorLogs(ctx.logGroupName, args.windowMinutes || 15),
-    get_deployment_logs: (args) => unavailable ? Promise.resolve({ success: false, error: unavailable }) : datadog
-      ? datadog.getDeploymentLogs(args.windowMinutes || 30)
-      : logs.getDeploymentLogs(ctx.logGroupName, args.windowMinutes || 30),
-    get_service_metrics: (args) => unavailable ? Promise.resolve({ success: false, error: unavailable }) : datadog
-      ? datadog.getServiceMetrics(args.windowMinutes || 30)
-      : metrics.getServiceMetrics(ctx.metricNamespace, args.windowMinutes || 30),
-    get_alarm_details: () => unavailable ? Promise.resolve({ success: false, error: unavailable }) : datadog
-      ? datadog.getAlarmDetails()
-      : metrics.getAlarmDetails(ctx.alarmName),
+    ...observabilityExecutors,
     ...(githubAvailable
       ? {
           get_recent_commits: (args) => github.getRecentCommits(args.count || 10),
           get_commit_diff: (args) => github.getCommitDiff(args.sha),
         }
       : {}),
+    get_dependency_resource_health: (args) => awsResource.getResourceHealth(args.resourceArn, args.windowMinutes || 15),
   };
 
   return { schemas, executors };

@@ -19,9 +19,17 @@ variable "openrouter_api_key" {
   default   = ""
 }
 
+# Deprecated compatibility alias. New configurations should use
+# openrouter_api_key instead.
+variable "anthropic_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 variable "openrouter_model" {
   type    = string
-  default = "anthropic/claude-sonnet-4"
+  default = "anthropic/claude-sonnet-5"
 }
 
 variable "slack_bot_token" {
@@ -42,13 +50,13 @@ variable "github_repo_name" {
 # ── The breaking commit (from your GitHub repo) ──
 variable "breaking_commit_sha" {
   type    = string
-  default = "a3f8b2c"
+  default = "a58fee9"
 }
 variable "breaking_commit_msg" {
   type    = string
-  default = "refactor: payment service cleanup - remove legacy null checks"
+  default = "perf: right-size ledger connection pool for new Lambda concurrency limits"
 }
 variable "breaking_commit_author" {
   type    = string
-  default = "dev-jsmith"
+  default = "acme-dev"
 }

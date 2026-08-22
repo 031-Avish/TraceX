@@ -38,6 +38,7 @@ echo ""
 # ── Capture outputs ──
 API_URL=$(terraform output -raw payment_api_url 2>/dev/null)
 CONFIG_API_URL=$(terraform output -raw config_api_url 2>/dev/null)
+CONSOLE_URL=$(terraform output -raw console_url 2>/dev/null)
 ALARM=$(terraform output -raw alarm_name 2>/dev/null)
 REGION=$(terraform output -raw 2>/dev/null || echo "us-east-1")
 echo -e "  ${GREEN}✓${NC} Infrastructure deployed!\n"
@@ -60,10 +61,10 @@ echo ""
 echo -e "  ${BOLD}Payment API:${NC}     $API_URL"
 echo -e "  ${BOLD}Status:${NC}          Healthy ✅ (traffic flowing every minute)"
 echo ""
-echo -e "  ${BOLD}Config Console:${NC}  cd console && npm install && npm run dev"
-echo -e "  ${BOLD}Config API:${NC}      $CONFIG_API_URL  (paste into the console's Settings page)"
-echo -e "  (configure connectors + at least one application there before running the demo,"
-echo -e "   or the agent falls back to the env-var defaults for the acme-payment-service demo)"
+echo -e "  ${BOLD}Console:${NC}         $CONSOLE_URL"
+echo -e "  (the console is already pointed at this deployment's config API — no setup needed."
+echo -e "   configure connectors + at least one application there before running the demo, or"
+echo -e "   the agent falls back to the env-var defaults for the acme-payment-service demo)"
 echo ""
 echo -e "  ${BOLD}${RED}🚨 TO BREAK IT (triggers the incident):${NC}"
 echo -e "    ./break-it.sh"

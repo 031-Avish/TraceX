@@ -3,7 +3,7 @@
 # ═══════════════════════════════════════════════════════════════
 
 locals {
-  effective_openrouter_api_key = var.openrouter_api_key != "" ? var.openrouter_api_key : var.openrouter_api_key
+  effective_openrouter_api_key = var.openrouter_api_key != "" ? var.openrouter_api_key : var.anthropic_api_key
 }
 
 # ── SNS Topic (alarm → agent trigger) ────────────────────────
@@ -55,7 +55,7 @@ resource "aws_iam_role_policy" "agent_policy" {
       {
         Sid      = "ReadMetrics"
         Effect   = "Allow"
-        Action   = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms"]
+        Action   = ["cloudwatch:GetMetricData", "cloudwatch:GetMetricStatistics", "cloudwatch:DescribeAlarms", "cloudwatch:ListTagsForResource"]
         Resource = "*"
       }
     ]
@@ -120,7 +120,7 @@ resource "aws_lambda_function" "triage_agent" {
   lifecycle {
     precondition {
       condition     = local.effective_openrouter_api_key != ""
-      error_message = "Set openrouter_api_key in terraform.tfvars (openrouter_api_key is accepted only as a deprecated compatibility alias)."
+      error_message = "Set openrouter_api_key in terraform.tfvars (anthropic_api_key remains supported only as a deprecated compatibility alias)."
     }
   }
 

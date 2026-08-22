@@ -7,6 +7,7 @@
   --accent: #4f8cff;
   --ok: #3fb950;
   --danger: #f85149;
+  --warn: #d29922;
   --radius: 10px;
 }
 * {
@@ -132,6 +133,141 @@ main {
 .dot.off {
   background: var(--text-dim);
 }
+.dot.err {
+  background: var(--danger);
+}
+.dot.warn {
+  background: var(--warn);
+}
+.dot.info {
+  background: var(--accent);
+}
+
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(210, 153, 34, 0.3);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sim-note {
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sim-error {
+  color: var(--danger);
+}
+.badge.reported {
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
+}
+
+/* ── Simulator: scenario sections ──────────────────────────────────── */
+.sim-section {
+  margin-bottom: 20px;
+}
+.sim-section-subtitle {
+  margin: -6px 0 16px;
+}
+
+/* ── Simulator: live-flow stepper ──────────────────────────────────── */
+.stepper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  margin: 4px 0 14px;
+}
+.stepper-step {
+  flex: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  min-width: 0;
+  padding-top: 8px;
+}
+.stepper-step::before {
+  content: "";
+  position: absolute;
+  top: 15px;
+  left: -50%;
+  width: 100%;
+  height: 2px;
+  background: var(--panel-border);
+  z-index: 0;
+}
+.stepper-step:first-child::before {
+  content: none;
+}
+.stepper-step.complete::before {
+  background: var(--ok);
+}
+.stepper-dot {
+  position: relative;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 2px solid var(--panel-border);
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--text-dim);
+}
+.stepper-step.complete .stepper-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #06210c;
+}
+.stepper-step.active .stepper-dot {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 3px rgba(210, 153, 34, 0.18);
+}
+.stepper-step.active.step-reported .stepper-dot {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(79, 140, 255, 0.18);
+}
+.stepper-step.active.step-recovered .stepper-dot {
+  border-color: var(--ok);
+  box-shadow: 0 0 0 3px rgba(63, 185, 80, 0.18);
+}
+.stepper-label {
+  font-size: 10px;
+  margin-top: 6px;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+.stepper-step.complete .stepper-label,
+.stepper-step.active .stepper-label {
+  color: var(--text);
+  font-weight: 600;
+}
+.stepper-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+.stepper-meta-ok {
+  color: var(--ok);
+}
 
 .btn-link {
   color: var(--accent);
@@ -163,7 +299,8 @@ main {
 .card-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 10px;
   margin-bottom: 12px;
 }
 .card-head .title {
@@ -273,6 +410,11 @@ button.danger {
   font-size: 12px;
   color: var(--text-dim);
 }
+.meta-infra {
+  margin-top: 2px;
+  color: var(--accent);
+  opacity: 0.85;
+}
 .app-actions {
   display: flex;
   gap: 8px;
@@ -305,6 +447,21 @@ button.danger {
   font-size: 12px;
   margin-top: 4px;
 }
+.hint-inline {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 400;
+}
+.field-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-dim);
+  padding: 6px 0 2px;
+  border-top: 1px solid var(--panel-border);
+  margin-top: 6px;
+}
 .error-text {
   color: var(--danger);
   font-size: 13px;
@@ -334,7 +491,13 @@ button.danger {
 .page-heading p, .setup-header p { margin: 5px 0 0; color: var(--text-dim); font-size: 13px; }
 .connection-count { padding: 6px 10px; border: 1px solid var(--panel-border); border-radius: 999px; color: var(--text-dim); font-size: 12px; }
 .catalog-section { margin-bottom: 30px; }
-.connector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+/* align-items: start is the key fix here — CSS Grid's default (stretch)
+   forces every tile sharing a row with the tallest tile to match its
+   height. The CloudWatch tile's description is a full paragraph (see
+   connectors.js) while every other tile's is one short sentence; without
+   this override, Datadog and Grafana were being stretched from their
+   natural 126px to CloudWatch's ~450px just because they shared a row. */
+.connector-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; align-items: start; }
 .connector-tile { position: relative; min-height: 126px; padding: 18px; display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; align-items: start; text-align: left; background: var(--panel); border: 1px solid var(--panel-border); color: var(--text); }
 .connector-tile:hover { border-color: #3a4655; filter: none; }
 .connector-tile.unavailable { opacity: .48; cursor: default; }
@@ -342,8 +505,24 @@ button.danger {
 .provider-icon.large { width: 52px; height: 52px; font-size: 22px; }
 .tile-copy { display: flex; flex-direction: column; min-width: 0; }
 .tile-copy strong { font-size: 14px; }
-.tile-copy small { color: var(--text-dim); font-size: 12px; margin-top: 5px; line-height: 1.4; }
-.last-tested { position: absolute; left: 74px; bottom: 14px; font-size: 10px; color: var(--text-dim); }
+/* Clamp to 3 lines so one connector having a much longer description (e.g.
+   CloudWatch's) doesn't balloon its own tile out of proportion with the
+   rest of the grid even with align-items: start above. */
+.tile-copy small {
+  color: var(--text-dim);
+  font-size: 12px;
+  margin-top: 5px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Flows below the icon/copy/badge row instead of being absolutely
+   positioned — absolute positioning assumed a fixed tile height, which
+   broke down for tiles whose badge/description wraps onto extra lines
+   (e.g. CloudWatch's infra badge), overlapping this text with it. */
+.last-tested { grid-column: 2 / -1; margin-top: 8px; font-size: 10px; color: var(--text-dim); }
 .connector-setup { max-width: 700px; margin: 0 auto; }
 .back-button { background: transparent; color: var(--text-dim); padding: 0; margin-bottom: 24px; }
 .setup-header { display: flex; gap: 15px; align-items: center; margin-bottom: 18px; }
@@ -354,3 +533,173 @@ button.danger {
 .test-result { padding: 10px 12px; border-radius: 6px; font-size: 12px; margin-top: 12px; }
 .test-result.success { color: var(--ok); background: rgba(63,185,80,.1); border: 1px solid rgba(63,185,80,.35); }
 .test-result.failure { color: var(--danger); background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.35); }
+
+/* ── Infra ("always on") connector treatment — CloudWatch's card ─────── */
+.badge.always-on {
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
+}
+.infra-badge {
+  display: inline-block;
+  margin-top: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(79, 140, 255, 0.1);
+  border: 1px solid rgba(79, 140, 255, 0.25);
+  border-radius: 999px;
+  padding: 3px 8px;
+  width: fit-content;
+}
+.connector-tile.infra { border-color: rgba(79, 140, 255, 0.3); }
+.infra-callout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: rgba(79, 140, 255, 0.08);
+  border: 1px solid rgba(79, 140, 255, 0.3);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.infra-callout-icon { font-size: 18px; line-height: 1; }
+.infra-callout strong { display: block; margin-bottom: 4px; font-size: 13px; color: var(--text); }
+.infra-callout p { margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* ── Overview: stat tiles + live status ──────────────────────────────── */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.stat-tile {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.stat-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.stat-of { font-size: 15px; font-weight: 500; color: var(--text-dim); }
+.stat-label { margin-top: 5px; font-size: 12px; color: var(--text-dim); }
+.stat-tile.stat-alert { border-color: rgba(248, 81, 73, 0.4); }
+.stat-tile.stat-alert .stat-value { color: var(--danger); }
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.status-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: #0e1420;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text);
+}
+.status-item:hover { border-color: #3a4655; }
+.status-item .status-left { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.status-item .status-appid { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-item .status-state { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+
+/* ── Overview: "getting started" checklist ────────────────────────────── */
+.setup-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.setup-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-top: 1px solid var(--panel-border);
+}
+.setup-checklist li:first-child { border-top: none; }
+.setup-checklist-dot {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid var(--panel-border);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.setup-checklist li.done .setup-checklist-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #06210c;
+}
+.setup-checklist li.done .setup-checklist-label { color: var(--text-dim); text-decoration: line-through; text-decoration-color: var(--panel-border); }
+.setup-checklist-label { font-size: 13px; font-weight: 600; }
+
+/* ── Reusable empty state ──────────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 40px 20px;
+  color: var(--text-dim);
+}
+.empty-state-icon {
+  font-size: 30px;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #161d28;
+  border: 1px solid var(--panel-border);
+  margin-bottom: 6px;
+}
+.empty-state h3 { margin: 0; font-size: 15px; color: var(--text); }
+.empty-state p { margin: 0 0 10px; font-size: 13px; max-width: 380px; line-height: 1.5; }
+
+/* ── Modal ─────────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 12, 0.65);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 20px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.modal-panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.modal-panel.wide { max-width: 760px; }
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 0;
+}
+.modal-head h2 { margin: 0; font-size: 16px; }
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.modal-close:hover { color: var(--text); background: #161d28; filter: none; }
+.modal-body { padding: 16px 20px 20px; }
+.modal-body .app-form { border: none; padding: 0; }

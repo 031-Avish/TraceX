@@ -7,10 +7,13 @@
 # ═══════════════════════════════════════════════════════════════
 
 locals {
-  log_group_name   = "/ecs/acme-payment-service"
-  metric_namespace = "AcmeApp"
-  alarm_name       = "acme-payment-5xx-critical"
-  chaos_param      = "/presidio-demo/chaos-mode"
+  log_group_name     = "/ecs/acme-payment-service"
+  metric_namespace   = "AcmeApp"
+  alarm_name         = "acme-payment-5xx-critical"
+  alarm_4xx_name     = "acme-payment-4xx-warning"
+  alarm_latency_name = "acme-payment-high-latency"
+  alarm_fatal_name   = "acme-payment-fatal-error"
+  chaos_param        = "/acme-payment-service/ops/health-override"
 }
 
 # ── SSM Parameter: The Chaos Switch ──────────────────────────
@@ -60,24 +63,27 @@ resource "aws_iam_role_policy" "demo_app_policy" {
 
 # ── Demo App Lambda (Payment Service) ────────────────────────
 resource "null_resource" "demo_app_deps" {
-  triggers = { pkg = filemd5("${path.module}/../lambda-demo-app/package.json") }
+  triggers = { pkg = filemd5("${path.module}/../acme-payment-service/package.json") }
   provisioner "local-exec" {
     command     = "npm install --production"
-    working_dir = "${path.module}/../lambda-demo-app"
+    working_dir = "${path.module}/../acme-payment-service"
   }
 }
 
+# Source lives in acme-payment-service/ — a standalone repo (pushed
+# separately to github.com/031-Avish/acme-payment-service) so the
+# customer's application code isn't nested inside TraceX's own repo.
 data "archive_file" "demo_app_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/../lambda-demo-app"
+  source_dir  = "${path.module}/../acme-payment-service"
   output_path = "${path.module}/../.build/demo-app.zip"
-  excludes    = [".env"]
+  excludes    = [".env", ".git", ".gitignore", "README.md"]
   depends_on  = [null_resource.demo_app_deps]
 }
 
 resource "aws_lambda_function" "payment_service" {
   function_name    = "acme-payment-service"
-  description      = "Fake payment API — chaos-switchable for demo"
+  description      = "Acme Corp payment API — connected to github.com/031-Avish/acme-payment-service"
   role             = aws_iam_role.demo_app_role.arn
   handler          = "index.handler"
   runtime          = "nodejs18.x"
@@ -93,10 +99,10 @@ resource "aws_lambda_function" "payment_service" {
 
   environment {
     variables = {
-      CHAOS_PARAM_NAME       = local.chaos_param
-      BREAKING_COMMIT_SHA    = var.breaking_commit_sha
-      BREAKING_COMMIT_MSG    = var.breaking_commit_msg
-      BREAKING_COMMIT_AUTHOR = var.breaking_commit_author
+      HEALTH_OVERRIDE_PARAM_NAME  = local.chaos_param
+      ACME_BREAKING_COMMIT_SHA    = var.breaking_commit_sha
+      ACME_BREAKING_COMMIT_MSG    = var.breaking_commit_msg
+      ACME_BREAKING_COMMIT_AUTHOR = var.breaking_commit_author
     }
   }
 
@@ -226,6 +232,45 @@ resource "aws_cloudwatch_log_metric_filter" "error_5xx" {
   }
 }
 
+resource "aws_cloudwatch_log_metric_filter" "error_4xx" {
+  name           = "payment-4xx-filter"
+  log_group_name = aws_cloudwatch_log_group.app_logs.name
+  pattern        = "{ $.statusCode >= 400 && $.statusCode < 500 }"
+
+  metric_transformation {
+    name          = "Payment4xxCount"
+    namespace     = local.metric_namespace
+    value         = "1"
+    default_value = "0"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "request_latency" {
+  name           = "payment-latency-filter"
+  log_group_name = aws_cloudwatch_log_group.app_logs.name
+  pattern        = "{ $.responseTimeMs = * }"
+
+  metric_transformation {
+    name      = "PaymentLatency"
+    namespace = local.metric_namespace
+    value     = "$.responseTimeMs"
+    unit      = "Milliseconds"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "fatal_errors" {
+  name           = "payment-fatal-filter"
+  log_group_name = aws_cloudwatch_log_group.app_logs.name
+  pattern        = "{ $.level = \"FATAL\" }"
+
+  metric_transformation {
+    name          = "PaymentFatalCount"
+    namespace     = local.metric_namespace
+    value         = "1"
+    default_value = "0"
+  }
+}
+
 resource "aws_cloudwatch_metric_alarm" "payment_5xx" {
   alarm_name          = local.alarm_name
   alarm_description   = "P1: Acme Corp payment-service 5xx error rate exceeded threshold"
@@ -239,6 +284,58 @@ resource "aws_cloudwatch_metric_alarm" "payment_5xx" {
   treat_missing_data  = "notBreaching"
 
   alarm_actions = [aws_sns_topic.incident_alarms.arn]
+  ok_actions    = [aws_sns_topic.incident_alarms.arn]
 
-  tags = { Client = "acme-corp", Service = "payment-service" }
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P1" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "payment_4xx" {
+  alarm_name          = local.alarm_4xx_name
+  alarm_description   = "P2: Acme Corp payment-service 4xx responses exceeded threshold"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "Payment4xxCount"
+  namespace           = local.metric_namespace
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 3
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.incident_alarms.arn]
+  ok_actions          = [aws_sns_topic.incident_alarms.arn]
+
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P2" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "payment_high_latency" {
+  alarm_name          = local.alarm_latency_name
+  alarm_description   = "P2: Acme Corp payment-service average latency exceeded 350 ms"
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PaymentLatency"
+  namespace           = local.metric_namespace
+  period              = 60
+  statistic           = "Average"
+  threshold           = 350
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.incident_alarms.arn]
+  ok_actions          = [aws_sns_topic.incident_alarms.arn]
+
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P2" }
+}
+
+resource "aws_cloudwatch_metric_alarm" "payment_fatal" {
+  alarm_name          = local.alarm_fatal_name
+  alarm_description   = "P1: Acme Corp payment-service emitted a fatal error"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PaymentFatalCount"
+  namespace           = local.metric_namespace
+  period              = 60
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.incident_alarms.arn]
+  ok_actions          = [aws_sns_topic.incident_alarms.arn]
+
+  tags = { Client = "acme-corp", Service = "acme-payment-service", Environment = "production", Severity = "P1" }
 }

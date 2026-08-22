@@ -85,38 +85,68 @@ async function resolveTenantConfig(tenantId, appId) {
 
     if (!app) return null;
 
-    const observabilityType = app.observabilityProvider || "cloudwatch";
-    const observabilityConnector = connectors[observabilityType];
-    const [githubSecret, slackSecret, observabilitySecret] = await Promise.all([
+    // Build the list of observability sources actually available for this app —
+    // not a single provider "choice". CloudWatch is always included: the alarm
+    // that triggered this investigation is a CloudWatch alarm, so its metric and
+    // log group are always relevant ground truth. Any other connected+ready
+    // provider is added alongside it, letting the agent itself decide which
+    // source(s) to query per incident instead of the registry picking for it.
+    // Add an entry here for each new observability connector type as its
+    // collector is built — nothing else in the agent needs to change.
+    const OBSERVABILITY_SOURCE_BUILDERS = {
+      datadog: (connector, secret) =>
+        secret.apiKey && {
+          provider: "datadog",
+          apiKey: secret.apiKey,
+          appKey: secret.appKey,
+          site: connector.site || "us1",
+          service: app.serviceName || appId,
+          environment: app.environment,
+          errorQuery: app.errorQuery,
+          deploymentQuery: app.deploymentQuery,
+          metricQuery: app.metricQuery,
+          monitorId: app.monitorId,
+        },
+    };
+
+    const observabilityConnectorTypes = Object.keys(OBSERVABILITY_SOURCE_BUILDERS).filter((type) => connectors[type]);
+    const [githubSecret, slackSecret, ...observabilitySecrets] = await Promise.all([
       connectors.github ? getSecret(connectors.github.secretRef) : {},
       connectors.slack ? getSecret(connectors.slack.secretRef) : {},
-      observabilityConnector ? getSecret(observabilityConnector.secretRef) : {},
+      ...observabilityConnectorTypes.map((type) => getSecret(connectors[type].secretRef)),
     ]);
+
+    const observabilitySources = [{ provider: "cloudwatch" }];
+    observabilityConnectorTypes.forEach((type, i) => {
+      const source = OBSERVABILITY_SOURCE_BUILDERS[type](connectors[type], observabilitySecrets[i]);
+      if (source) observabilitySources.push(source);
+    });
 
     return {
       logGroupName: app.logGroupName,
       metricNamespace: app.metricNamespace,
       alarmName: app.alarmName,
-      observability:
-        observabilityType === "datadog" && observabilityConnector && observabilitySecret.apiKey
-          ? {
-              provider: "datadog",
-              apiKey: observabilitySecret.apiKey,
-              appKey: observabilitySecret.appKey,
-              site: observabilityConnector.site || "us1",
-              service: app.serviceName || appId,
-              environment: app.environment,
-              errorQuery: app.errorQuery,
-              deploymentQuery: app.deploymentQuery,
-              metricQuery: app.metricQuery,
-              monitorId: app.monitorId,
-            }
-          : observabilityType === "cloudwatch"
-            ? { provider: "cloudwatch" }
-            : { provider: "unavailable", error: `${observabilityType} connector is missing or has incomplete credentials` },
+      // Optional, presenter-entered metadata (Applications page — "Related
+      // infra resource"): the specific downstream AWS resource this app is
+      // known to depend on. Purely informational — surfaced to the model as
+      // one more fact in the incident summary so it can go straight to
+      // get_dependency_resource_health instead of having to infer an ARN
+      // from log text alone; the agent still verifies with real tool calls
+      // rather than trusting this at face value.
+      infraResourceName: app.infraResourceName || null,
+      infraResourceArn: app.infraResourceArn || null,
+      observabilitySources,
       github:
         connectors.github && githubSecret.token
-          ? { token: githubSecret.token, owner: app.githubRepoOwner || connectors.github.owner, repo: app.githubRepoName || connectors.github.repo }
+          ? {
+              token: githubSecret.token,
+              owner: app.githubRepoOwner || connectors.github.owner,
+              repo: app.githubRepoName || connectors.github.repo,
+              // Scopes commit lookups to this service's own directory when
+              // multiple services share one repo, so an unrelated service's
+              // commit can't get pulled into this investigation.
+              path: app.githubPath || null,
+            }
           : null,
       slack:
         connectors.slack && slackSecret.token

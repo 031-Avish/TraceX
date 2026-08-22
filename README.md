@@ -51,8 +51,8 @@ configure does.
 
 ┌──────────────────────────── SELF-SERVICE CONSOLE ─────────────────────────────────────┐
 │                                                                                        │
-│  console/ (React)  ──>  lambda-config-api  ──>  DynamoDB (scope metadata)             │
-│                                              └─>  Secrets Manager (tokens, KMS-encrypted)│
+│  CloudFront ──> S3 (React build)  ──>  lambda-config-api  ──>  DynamoDB (scope metadata)│
+│                                                             └─>  Secrets Manager (KMS)   │
 │                                                                                        │
 │  Connect GitHub/Slack, map an application to a CloudWatch log group/alarm — no one     │
 │  touches Terraform or Lambda env vars to onboard a new app.                           │
@@ -61,8 +61,9 @@ configure does.
 ```
 
 Terraform manages all of it: the simulated client environment (payment API, traffic generator,
-chaos switch, alarm), the triage agent, and the connector console's backend (DynamoDB table,
-dedicated KMS key, Secrets Manager, config API + its own API Gateway).
+chaos switch, alarm), the triage agent, and the connector console (DynamoDB table, dedicated
+KMS key, Secrets Manager, config API + its own API Gateway, and the console itself hosted on
+S3 + CloudFront — a real HTTPS URL, not a local dev server).
 
 ---
 
@@ -118,10 +119,10 @@ cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 ./deploy.sh
 
 # 3. Configure connectors + at least one application
-cd console && npm install && npm run dev
-# open the printed local URL, go to Settings, paste in the config_api_url
-# from deploy.sh's output, then add your GitHub/Slack connectors and an
-# application (appId "payment-service" to match the demo's alarm)
+# Terraform hosts the console on S3 + CloudFront and prints its URL —
+# open it (already pointed at this deployment's config API, no setup
+# needed), then add your GitHub/Slack connectors and an application
+# (appId "payment-service" to match the demo's alarm)
 
 # 4. Wait 2 min for traffic to flow, then BREAK IT
 ./break-it.sh
@@ -255,6 +256,7 @@ presidio-fullstack/
 │   ├── demo-app.tf              # Payment service + traffic gen + alarm
 │   ├── agent.tf                 # Triage agent + SNS
 │   ├── connectors.tf            # DynamoDB registry + KMS key + config API
+│   ├── console-hosting.tf       # S3 + CloudFront — hosts the built console
 │   ├── outputs.tf
 │   └── terraform.tfvars.example
 │

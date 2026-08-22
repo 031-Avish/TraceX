@@ -29,7 +29,7 @@ echo "   Flipping chaos switch to TRUE..."
 echo ""
 
 aws ssm put-parameter \
-  --name "/presidio-demo/chaos-mode" \
+  --name "/acme-payment-service/ops/health-override" \
   --value "true" \
   --type String \
   --overwrite \

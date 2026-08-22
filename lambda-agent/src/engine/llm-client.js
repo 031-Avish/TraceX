@@ -24,7 +24,7 @@ class LLMClient {
     this.outputCostPer1k = Number(process.env.LLM_OUTPUT_COST_PER_1K || 0);
   }
 
-  async chat({ messages, tools, systemPrompt, maxTokens = 1500 }) {
+  async chat({ messages, tools, systemPrompt, maxTokens = Number(process.env.LLM_MAX_TOKENS || 4000) }) {
     const requestMessages = systemPrompt ? [{ role: "system", content: systemPrompt }, ...messages] : messages;
     const response = await this.client.chat.completions.create({
       model: this.model,

@@ -62,7 +62,7 @@ resource "aws_iam_role_policy" "agent_connector_read" {
       {
         Sid      = "ReadConnectorMetadata"
         Effect   = "Allow"
-        Action   = ["dynamodb:Query", "dynamodb:GetItem"]
+        Action   = ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem"]
         Resource = aws_dynamodb_table.connector_registry.arn
       },
       {
@@ -126,6 +126,43 @@ resource "aws_iam_role_policy" "config_api_policy" {
         Effect   = "Allow"
         Action   = ["kms:Decrypt", "kms:GenerateDataKey"]
         Resource = aws_kms_key.connector_secrets.arn
+      },
+      # ── Simulate incident routes (POST /simulate/{appId}/break|heal, GET
+      #    /simulate/{appId}/status) — see lambda-config-api/index.js's
+      #    SIMULATE_REGISTRY. Each statement is scoped to exactly the
+      #    resources that mechanism touches, not a blanket */* grant.
+      {
+        Sid    = "SimulateChaosToggle"
+        Effect = "Allow"
+        Action = ["ssm:PutParameter", "ssm:GetParameter"]
+        Resource = [
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/shopco/chaos/*",
+          "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/acme-payment-service/ops/*",
+        ]
+      },
+      {
+        Sid      = "SimulateAcmePaymentInvoke"
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = aws_lambda_function.payment_service.arn
+      },
+      {
+        Sid    = "SimulateInventoryThrottle"
+        Effect = "Allow"
+        Action = ["lambda:PutFunctionConcurrency", "lambda:DeleteFunctionConcurrency"]
+        # shopco-inventory-service is deployed by the separate shopco-platform
+        # Terraform stack (same AWS account) — referenced by literal ARN since
+        # this state has no resource to point at.
+        Resource = "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:shopco-inventory-service"
+      },
+      {
+        Sid    = "SimulateStatusReadAlarms"
+        Effect = "Allow"
+        Action = ["cloudwatch:DescribeAlarms"]
+        # DescribeAlarms does not support resource-level restriction (same
+        # constraint the triage agent's own ReadMetrics statement in
+        # agent.tf already accepts for this action).
+        Resource = "*"
       }
     ]
   })

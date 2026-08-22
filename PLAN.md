@@ -99,6 +99,16 @@ worth re-reading the code rather than trusting the earlier claim.
   Edit — not just re-add — plus Add/Cancel), Settings (API URL + tenant ID, persisted to
   localStorage). `deploy.sh`'s printed instructions updated to match (`npm run dev` instead of
   "open index.html").
+- [x] **UI workflow fix — CloudWatch moved to Integrations**: CloudWatch was previously selected
+  via a per-app "Observability provider" dropdown in the Applications page, which made it look like
+  an application-level choice rather than a first-class integration. Fixed across three files:
+  `console/src/connectors.js` — `cloudwatch` added as the first entry in the Observability category
+  with a `region` field (no credentials — IAM-based); `console/src/pages/ApplicationsPage.jsx` —
+  removed `observabilityProvider` dropdown entirely, restructured the form into labelled scope
+  sections (CloudWatch scope, Datadog scope, per-app overrides) so the app form configures *which*
+  resources within a connected integration, not *which* provider to use;
+  `console/src/pages/OverviewPage.jsx` — `cloudwatch` added to the connector status summary so
+  its connected state is visible on the Overview. Build verified clean (`npm run build`).
 
 ## Phase 2.6 — PII sanitization gap (found by asking "are we actually removing PII?")
 
@@ -126,6 +136,37 @@ model, in `agent-loop.js`. Two real gaps followed from that:
 - [x] Confirmed no real PII (the user's own email, etc.) leaked into any repo file — everything is
   synthetic demo data (`Acme Corp`, `dev-jsmith`, placeholder tokens).
 
+## Phase 2.7 — Source confidence + injection hardening
+
+Motivated by the same audit approach as Phase 2.6: trace every path where user-controlled
+data reaches the LLM and ask whether Claude can distinguish ground-truth AWS telemetry from
+free-form user text. The sanitizer handles PII; this phase handles adversarial instructions
+embedded in data — a different attack class entirely.
+
+- [x] `lambda-agent/src/utils/confidence-scorer.js` — deterministic (no LLM call, no added
+  latency, no new npm dependencies) confidence labeler. Assigns a base score per tool:
+  `get_alarm_details`/`get_service_metrics` → CRITICAL (0.95), `get_error_logs` → HIGH (0.85),
+  `get_deployment_logs` → HIGH (0.80), `get_commit_diff` → MEDIUM (0.65),
+  `get_recent_commits` → LOW (0.45). Valid-JSON structure adds a +0.05 bonus.
+  If an injection pattern is detected, confidence drops to 0.05 and the data field is
+  replaced with `[QUARANTINED]`. Covers three injection vectors: commit message text,
+  code comment injection in diffs (e.g. `// ignore previous instructions`), and
+  token-stuffing patterns (`[INST]`, `<|...|>`, `### System`).
+- [x] `lambda-agent/src/engine/agent-loop.js` — wired `applyConfidenceLabel(name, sanitized)`
+  between the sanitize and `_truncate` steps, so every tool result reaching Claude is wrapped
+  in a `{ _tracex_meta: { source, confidence, trust_level, guidance }, data }` envelope.
+  The `_tracex_meta` block appears at the front of the serialized string and survives
+  `_truncate()` even on large payloads. Updated `_systemPrompt()` to explain trust levels
+  so Claude knows CRITICAL/HIGH sources dominate, LOW sources cannot be sole root cause,
+  and SUSPECT results must be discarded entirely.
+
+Defense-in-depth context (no single layer is sufficient on its own):
+  1. Tool filtering (Phase 2.5) — unconfigured GitHub means no commit tool → zero commit injection surface
+  2. `_limitArrays` (Phase 2.5) — caps to 20 items, limiting attacker-controlled text volume
+  3. Injection pattern detection (this phase) — quarantines common adversarial patterns
+  4. System prompt framing (this phase) — Claude cannot conclude from LOW-trust evidence alone
+  5. Sanitizer on Slack output (Phase 2.6) — PII can't leak even in Claude's generated text
+
 ## Phase 3 — Submission polish
 
 - [x] Update `README.md` — rewritten end to end: corrected architecture diagram (was still showing
@@ -137,3 +178,105 @@ model, in `agent-loop.js`. Two real gaps followed from that:
 - [ ] Record demo video
 - [ ] Final pass: confirm no secrets anywhere in the repo before the push (submission stays on
   GitHub per the user's call — GitLab migration deferred to later, not blocking)
+
+## Phase 4 — ShopCo demo environment (separate repo)
+
+A realistic multi-service "client" environment for TraceX to investigate, built in a separate
+repo (`github.com/031-Avish/shopco-platform`) per `CLIENT_ENV_PLAN.md`. Kept fully separate from
+this repo deliberately — it's meant to look like a real customer's own engineering repo, not
+TraceX's own code, so it can't reference this repo, this plan, or anything demo-specific without
+undermining the whole point of the exercise.
+
+- 4 services (order/payment/inventory/notification), real inter-service HTTP calls, traceId
+  propagation, structured logging — all real, working code
+- 24-commit history spanning ~30 days, infra and application commits interleaved by date (not
+  infra as one commit at the end) — no branches/PRs, since the agent's `get_commit_diff`/
+  `get_recent_commits` tools only read `git log`, blind to whether history came through a PR
+- The "bad commit" is real, tagged `v2.4.1-hotfix`, diff verified with `git show --stat` after
+  every rewrite: removes a null-safety check in `payment-service`, replaced with unsafe
+  `currency.toUpperCase()`/`amount.toFixed()` calls that throw a real `TypeError` on null input
+- All 3 chaos scenarios (payment outage, inventory exhaustion, cascading order+payment failure)
+  are actually wired to SSM parameters in the application code, not just present in the plan doc
+- Terraform: one Lambda + API Gateway per service, IAM scoped per-service, alarms wired to
+  *this* repo's real SNS topic (the one hard dependency between the two stacks) — deployed for
+  real against live AWS credentials and confirmed working end to end (traffic generator batches
+  hitting 8/8 success, 0% error rate).
+- **Tried Lambda Function URLs instead of API Gateway** (4 gateways looked like pure overhead for
+  calls that never leave the stack, and the swap needed zero application-code changes — both use
+  the same v2.0 event payload shape). Applied it for real and every single request came back
+  `403 AccessDeniedException`, even with a correct resource policy and `AuthType: NONE` — this
+  AWS account is under Control Tower governance (confirmed via the `aws-controltower-*` SNS topic
+  and the authority-VPC-only check in `deploy.sh`), which blocks public/unauthenticated Function
+  URLs at the SCP level, above IAM. API Gateway isn't subject to that guardrail in this account
+  (verified — TraceX's own `config-api` responds fine). **Reverted back to API Gateway.** Worth
+  remembering for any future infra choices in this specific AWS account.
+- That revert surfaced a second, unrelated, pre-existing bug: all 4 services `require("../../shared/
+  ...")`, but the Lambda zips only ever packaged each service's own folder — `shared/` was never
+  included. Every invocation crashed with `Cannot find module '../../shared/tracing'`. This was
+  never caught before because the Function-URL 403s were failing before the Lambda ever ran.
+  Fixed by staging `services/<name>/` + `shared/` together per service before zipping and pointing
+  the handler at the nested path — no application code changed. Verified live: `POST /orders`
+  returns a real confirmed order end to end.
+- **Grafana dropped in favor of Datadog** for the second observability source — Datadog already
+  has a working collector on this side (`lambda-agent/src/collectors/datadog.js`); Grafana would
+  have needed a new collector plus a CloudWatch→Loki forwarder built from scratch, and a Grafana
+  Cloud account that needs manual signup either way.
+- Caught and scrubbed several places where the ShopCo repo's own comments/CI-workflow leaked
+  that it was a staged demo (e.g. a CI file literally saying "not a real workflow, part of the
+  ShopCo narrative") — worth double-checking any future additions there for the same thing, since
+  the whole value of that repo is looking like a real, independent customer environment.
+- Not yet done: Datadog account signup (manual, not automatable), registering the 4 apps in this
+  repo's console, the `break-*.sh`/`heal-all.sh` scripts, actually deploying either stack for real.
+- Console UI polish landed on `console-ui-revamp` (light/dark theme, confirm dialogs, richer
+  empty/loading states, Grafana catalog entry marked coming-soon) and was deployed to the hosted
+  console at `presidio-tracex-console-444455570150` / CloudFront, rebuilt with `VITE_CONFIG_API_URL`
+  pointed at the real deployed config API so it works without manual setup.
+
+## Phase 5 — Second customer, an infra-only scenario, and a Simulator page
+
+Three workstreams built in parallel (subagents), then manually reconciled — parallel builds
+don't know about each other's final shape, so integration bugs are expected and were found by
+diffing the real output, not by trusting each agent's own summary.
+
+- **acme-payment-service now has its own real repo** (`github.com/031-Avish/acme-payment-service`,
+  13 commits) instead of living inside this repo's `lambda-demo-app/` — a customer's app shouldn't
+  be nested in the vendor's own product repo. Its bug is a connection-pool/retry-removal
+  misconfiguration (`v1.8.2-hotfix`), a different class from ShopCo's missing-validation bug. It
+  also independently added fake `DEPLOYMENT_STARTED`/`DEPLOYMENT_COMPLETED` log lines citing the
+  real commit, giving `get_deployment_logs` real data to find — ShopCo's scenario never had that.
+- **A genuine infra-only incident**: `shopco-inventory-service` now has a CloudWatch alarm on its
+  native `AWS/Lambda` `Throttles` metric (zero app code involved) instead of no alarm at all.
+  Breaking it means zeroing reserved concurrency for real AWS-native throttling — nothing for
+  `get_recent_commits` to find. This is the scenario that actually tests whether the agent says
+  "not a code issue" instead of forcing a GitHub explanation onto something that has none.
+- **New `/simulate/{appId}/break|heal|status` API** on `lambda-config-api` plus a **Simulator**
+  console page to drive it without touching AWS console or Terraform. `handler.js` now persists
+  the full triage brief (rootCause/timeline/financialImpact/remediation), not just
+  confidence/severity, so the UI can show real content without needing Slack API access.
+- Integration bugs found and fixed during reconciliation: the simulate registry was invoking
+  acme's old canned "fatal" scenario instead of the new self-citing one; the UI's confidence
+  display assumed a 0–1 scale instead of the 0–100 used everywhere else; the SSM path rename
+  needed to ripple through 3 scripts and an IAM statement nothing else caught.
+- **Dropped the `${BREAKING_COMMIT_SHA}` citation from ShopCo's real bug's error log**, replacing
+  it with a generic "Payment processing failed" message. The SHA-citing version is realistic
+  (real systems tag errors with the deploying commit) but was too easy a test on its own — the
+  generic version forces the agent to actually correlate a raw stack trace against recent commit
+  history with no hint, which is the harder and more convincing capability to demonstrate. Kept
+  as the sole version for now rather than A/B, since the infra-only scenario already covers the
+  "don't fabricate a cause" failure mode and the Datadog-outage scenario already covers
+  "infer from timing with no citation" — three scenarios, three different reasoning demands.
+- **Reordered + retimed ShopCo's history** so the real bad commit is the most recent meaningful
+  commit (only a trivial docs commit follows it, which correctly documents the *post-bug* response
+  shape — checked, since moving it earlier would have had it describe fields that don't exist yet).
+  Retimed relative to whenever this was last run, landing ~40 minutes before "now" — this needs
+  re-running before an actual demo if much time has passed, since the whole point is the commit
+  reads as *just happened*, not as a fixed historical date.
+- **Found and fixed a real, previously-undetected leak**: `terraform/chaos.tf` had said
+  "CHAOS SWITCHES" and "re-apply mid-demo" in its header comment since the day it was written,
+  through every earlier scrubbing pass. Full-tree + full-history grep this time, not just the
+  specific phrases flagged before — worth repeating that broader sweep periodically rather than
+  trusting a prior clean scan stays clean as more content gets added.
+- Not yet done: creating an actual Datadog monitor/metric (the `get_alarm_details_datadog`/
+  `get_service_metrics_datadog` tools currently decline gracefully rather than having anything to
+  read), running the Simulator page end-to-end from the browser (only the API layer is verified
+  by curl/direct test so far).

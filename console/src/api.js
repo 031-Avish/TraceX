@@ -40,3 +40,14 @@ export const deleteApplication = (apiUrl, tenantId, appId) =>
   request(apiUrl, `/applications/${encodeURIComponent(appId)}?tenantId=${encodeURIComponent(tenantId)}`, {
     method: "DELETE",
   });
+
+// Simulator — trigger a synthetic incident against a registered application to verify
+// the alarm → agent → Slack pipeline end-to-end.
+export const simulateBreak = (apiUrl, appId) =>
+  request(apiUrl, `/simulate/${encodeURIComponent(appId)}/break`, { method: "POST" });
+
+export const simulateHeal = (apiUrl, appId) =>
+  request(apiUrl, `/simulate/${encodeURIComponent(appId)}/heal`, { method: "POST" });
+
+export const simulateStatus = (apiUrl, tenantId, appId) =>
+  request(apiUrl, `/simulate/${encodeURIComponent(appId)}/status?tenantId=${encodeURIComponent(tenantId)}`);
