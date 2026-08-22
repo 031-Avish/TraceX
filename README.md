@@ -48,14 +48,14 @@ You choose exactly which connectors it's allowed to touch — nothing is connect
 **The result: what used to take an hour — or, in our own experience, weeks — takes about 60
 seconds.**
 
-## Is This a Product?
+## Is This SaaS?
 
-Yes — and the architecture already reflects that, not just the pitch. Every customer's
-connectors (GitHub, Slack, Datadog, CloudWatch scope) live in a per-tenant DynamoDB registry,
-credentials are encrypted per-tenant in Secrets Manager behind a dedicated KMS key, and
-onboarding happens through a self-service console — nobody touches Terraform to add a new
-customer or application. That's the part of a SaaS that's hardest to retrofit later, and it's
-already built.
+Yes — we're pitching TraceX as a SaaS product, and the architecture already reflects that, not
+just the pitch. Every customer's connectors (GitHub, Slack, Datadog, CloudWatch scope) live in
+a per-tenant DynamoDB registry, credentials are encrypted per-tenant in Secrets Manager behind a
+dedicated KMS key, and onboarding happens through a self-service console — nobody touches
+Terraform to add a new customer or application. That's the part of a SaaS that's hardest to
+retrofit later, and it's already built.
 
 It's also immediately valuable **inside Presidio**: plenty of client engagements hit exactly
 this problem — an error surfaces somewhere in a multi-component architecture, and someone loses
@@ -225,10 +225,11 @@ Open **Applications → Add Application**. Each application maps to:
   application's own logs.
 
 We demo with two applications side by side to show two different failure classes: a
-microservice-style app (ShopCo) for application-level code bugs, and a separate single-service
-app (Acme) for infrastructure/dependency failures — so the same agent, unmodified, correctly
-tells the difference between "your code has a bug" and "your code is fine, a downstream AWS
-resource is the problem."
+microservice-style app, [**ShopCo**](https://github.com/031-Avish/shopco-platform), for
+application-level code bugs, and a separate single-service app,
+[**Acme**](https://github.com/031-Avish/acme-payment-service), for infrastructure/dependency
+failures — so the same agent, unmodified, correctly tells the difference between "your code has
+a bug" and "your code is fine, a downstream AWS resource is the problem."
 
 ### Watching an incident happen
 
