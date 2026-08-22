@@ -55,29 +55,72 @@ const INVESTIGATING_HINTS = [
 
 // Maps the raw /simulate/{appId}/status response onto the card's display phase.
 // Kept as a pure function so the polling effect below stays easy to follow.
+//
+// incidentState is written by lambda-agent/src/incidents/incident-store.js and
+// lambda-agent/src/handler.js. Every value either of those files ever sets as
+// `state:` must have an explicit branch below — falling through to `return
+// current` unhandled (as used to happen for "alerting") silently freezes the
+// card instead of showing real progress. Known values, confirmed by grepping
+// both files: alerting, investigating, slack_alert_failed, reported,
+// report_failed, recovered.
 function nextPhase(current, data) {
   if (!data) return current;
   const { alarmState, incidentState, confidence, severity } = data;
 
-  if (incidentState === "recovered") {
-    return { phase: "recovered", confidence: null, severity: null };
+  switch (incidentState) {
+    case "recovered":
+      return { phase: "recovered", confidence: null, severity: null, error: null };
+
+    case "reported":
+      return { phase: "reported", confidence, severity, error: null };
+
+    case "report_failed":
+      // The agent finished investigating but couldn't post the report to
+      // Slack even after handler.js's one retry — a real, terminal failure,
+      // not "nothing happening". Surface it instead of hiding it.
+      return {
+        phase: "reported",
+        confidence,
+        severity,
+        error: "Investigation finished, but posting the report to Slack failed.",
+      };
+
+    case "investigating":
+      return { phase: "investigating", confidence: null, severity: null, error: null };
+
+    case "slack_alert_failed":
+      // Only the *initial* alert failed to post — handler.js still runs the
+      // agent and retries the post before the final report, so this is
+      // usually transient. Keep showing "investigating" (it genuinely is
+      // running) but flag the hiccup rather than staying silent about it.
+      return {
+        phase: "investigating",
+        confidence: null,
+        severity: null,
+        error: "Initial Slack alert failed — the agent is investigating anyway and will retry the post.",
+      };
+
+    case "alerting":
+      // Incident record was just created: the alarm has fired but the agent
+      // hasn't posted any progress yet. Explicitly treated the same as the
+      // not-yet-set case below — keep showing "Alert Fired / waiting" rather
+      // than silently falling through with no matching branch.
+      return current;
+
+    default:
+      // incidentState is null/undefined — no incident recorded yet.
+      if (alarmState === "ALARM") {
+        return { phase: "investigating", confidence: null, severity: null, error: null };
+      }
+      // alarmState is OK/INSUFFICIENT_DATA/unknown — keep whatever we're
+      // currently showing (either still "healthy", or the optimistic
+      // "breaking" state right after clicking Break, waiting for CloudWatch
+      // to catch up).
+      return current;
   }
-  if (incidentState === "reported") {
-    return { phase: "reported", confidence, severity };
-  }
-  if (alarmState === "ALARM" && (incidentState === "investigating" || !incidentState)) {
-    return { phase: "investigating", confidence: null, severity: null };
-  }
-  if (alarmState === "OK" && !incidentState) {
-    // Alarm hasn't tripped yet — keep whatever we're currently showing
-    // (either still "healthy", or the optimistic "breaking" state right
-    // after clicking Break, waiting for CloudWatch to catch up).
-    return current;
-  }
-  return current;
 }
 
-function Stepper({ phase, confidence, severity, investigatingSeconds }) {
+function Stepper({ phase, confidence, severity, investigatingSeconds, breakingSeconds }) {
   const activeIndex = PHASE_STEP[phase] ?? 0;
 
   return (
@@ -91,7 +134,7 @@ function Stepper({ phase, confidence, severity, investigatingSeconds }) {
 
             {step.key === "alarm" && state === "active" && (
               <span className="stepper-meta">
-                <span className="spinner" /> waiting for alarm…
+                <span className="spinner" /> waiting for alarm… ({breakingSeconds}s)
               </span>
             )}
 
@@ -123,10 +166,17 @@ function Stepper({ phase, confidence, severity, investigatingSeconds }) {
 }
 
 function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
-  const [sim, setSim] = useState({ phase: "healthy", confidence: null, severity: null });
+  const [sim, setSim] = useState({ phase: "healthy", confidence: null, severity: null, error: null });
   const [breaking, setBreaking] = useState(false);
   const [healing, setHealing] = useState(false);
   const [investigatingSeconds, setInvestigatingSeconds] = useState(0);
+  const [breakingSeconds, setBreakingSeconds] = useState(0);
+  // Tracks the real ~45-90s wait between clicking "Fix" and the CloudWatch
+  // alarm actually clearing back to OK (incidentState -> "recovered"). Without
+  // this the card just sits on "reported" with no sign that anything is
+  // happening, which is exactly what reads as "stuck".
+  const [healTriggered, setHealTriggered] = useState(false);
+  const [healSeconds, setHealSeconds] = useState(0);
   const intervalRef = useRef(null);
   const resetTimerRef = useRef(null);
 
@@ -160,12 +210,40 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
     return () => clearInterval(id);
   }, [sim.phase]);
 
+  // Same idea, but for the "Alert Fired" step — this is the real ~45-90s
+  // metric-filter + alarm-evaluation latency between clicking "Break" and
+  // CloudWatch actually entering ALARM. Ticks the whole time sim.phase stays
+  // "breaking" so the wait visibly counts up instead of looking frozen.
+  useEffect(() => {
+    if (sim.phase !== "breaking") {
+      setBreakingSeconds(0);
+      return undefined;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setBreakingSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [sim.phase]);
+
+  // Same idea again for the wait after "Fix" is clicked: real ~45-90s for the
+  // alarm to clear back to OK. Runs from the moment Fix succeeds until the
+  // card reaches "recovered" (or is reset to "healthy").
+  useEffect(() => {
+    if (!healTriggered || sim.phase === "recovered" || sim.phase === "healthy") {
+      setHealSeconds(0);
+      return undefined;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setHealSeconds(Math.floor((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [healTriggered, sim.phase]);
+
   // "Recovered" is a brief success beat — reset back to "Healthy" a few
   // seconds after we see it so the card is ready for the next run.
   useEffect(() => {
     if (sim.phase !== "recovered") return undefined;
     resetTimerRef.current = setTimeout(() => {
-      setSim({ phase: "healthy", confidence: null, severity: null });
+      setSim({ phase: "healthy", confidence: null, severity: null, error: null });
+      setHealTriggered(false);
     }, RECOVERED_RESET_MS);
     return () => clearTimeout(resetTimerRef.current);
   }, [sim.phase]);
@@ -179,7 +257,8 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
       setBreaking(true);
       await simulateBreak(apiUrl, app.appId);
       showToast(`Synthetic incident triggered for ${app.appId}`, "ok");
-      setSim({ phase: "breaking", confidence: null, severity: null });
+      setSim({ phase: "breaking", confidence: null, severity: null, error: null });
+      setHealTriggered(false);
     } catch (err) {
       showToast(err.message, "error");
     } finally {
@@ -192,6 +271,7 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
       setHealing(true);
       await simulateHeal(apiUrl, app.appId);
       showToast(`Fix triggered for ${app.appId}`, "ok");
+      setHealTriggered(true);
     } catch (err) {
       showToast(err.message, "error");
     } finally {
@@ -215,10 +295,19 @@ function SimCard({ app, apiUrl, tenantId, showToast, confirm }) {
         confidence={sim.confidence}
         severity={sim.severity}
         investigatingSeconds={investigatingSeconds}
+        breakingSeconds={breakingSeconds}
       />
 
-      {sim.phase === "reported" && (
+      {sim.error && <p className="hint sim-note sim-error">⚠ {sim.error}</p>}
+
+      {sim.phase === "reported" && !sim.error && (
         <p className="hint sim-note">Check Slack for the full triage brief.</p>
+      )}
+
+      {healTriggered && sim.phase !== "recovered" && sim.phase !== "healthy" && (
+        <p className="hint sim-note">
+          <span className="spinner" /> Waiting for the alarm to clear… ({healSeconds}s)
+        </p>
       )}
 
       <div className="app-actions">

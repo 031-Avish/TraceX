@@ -160,6 +160,12 @@ main {
 
 .sim-note {
   margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sim-error {
+  color: var(--danger);
 }
 .badge.reported {
   background: rgba(79, 140, 255, 0.15);
@@ -500,3 +506,130 @@ button.danger {
 .test-result { padding: 10px 12px; border-radius: 6px; font-size: 12px; margin-top: 12px; }
 .test-result.success { color: var(--ok); background: rgba(63,185,80,.1); border: 1px solid rgba(63,185,80,.35); }
 .test-result.failure { color: var(--danger); background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.35); }
+
+/* ── Infra ("always on") connector treatment — CloudWatch's card ─────── */
+.badge.always-on {
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
+}
+.infra-badge {
+  display: inline-block;
+  margin-top: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(79, 140, 255, 0.1);
+  border: 1px solid rgba(79, 140, 255, 0.25);
+  border-radius: 999px;
+  padding: 3px 8px;
+  width: fit-content;
+}
+.connector-tile.infra { border-color: rgba(79, 140, 255, 0.3); }
+.infra-callout {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  background: rgba(79, 140, 255, 0.08);
+  border: 1px solid rgba(79, 140, 255, 0.3);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.infra-callout-icon { font-size: 18px; line-height: 1; }
+.infra-callout strong { display: block; margin-bottom: 4px; font-size: 13px; color: var(--text); }
+.infra-callout p { margin: 0; font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+
+/* ── Overview: "getting started" checklist ────────────────────────────── */
+.setup-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.setup-checklist li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-top: 1px solid var(--panel-border);
+}
+.setup-checklist li:first-child { border-top: none; }
+.setup-checklist-dot {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 2px solid var(--panel-border);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.setup-checklist li.done .setup-checklist-dot {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #06210c;
+}
+.setup-checklist li.done .setup-checklist-label { color: var(--text-dim); text-decoration: line-through; text-decoration-color: var(--panel-border); }
+.setup-checklist-label { font-size: 13px; font-weight: 600; }
+
+/* ── Reusable empty state ──────────────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 40px 20px;
+  color: var(--text-dim);
+}
+.empty-state-icon {
+  font-size: 30px;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #161d28;
+  border: 1px solid var(--panel-border);
+  margin-bottom: 6px;
+}
+.empty-state h3 { margin: 0; font-size: 15px; color: var(--text); }
+.empty-state p { margin: 0 0 10px; font-size: 13px; max-width: 380px; line-height: 1.5; }
+
+/* ── Modal ─────────────────────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 12, 0.65);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 6vh 20px;
+  overflow-y: auto;
+  z-index: 100;
+}
+.modal-panel {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  width: 100%;
+  max-width: 520px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.modal-panel.wide { max-width: 760px; }
+.modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 20px 0;
+}
+.modal-head h2 { margin: 0; font-size: 16px; }
+.modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.modal-close:hover { color: var(--text); background: #161d28; filter: none; }
+.modal-body { padding: 16px 20px 20px; }
+.modal-body .app-form { border: none; padding: 0; }
