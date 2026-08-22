@@ -7,6 +7,7 @@
   --accent: #4f8cff;
   --ok: #3fb950;
   --danger: #f85149;
+  --warn: #d29922;
   --radius: 10px;
 }
 * {
@@ -132,6 +133,47 @@ main {
 .dot.off {
   background: var(--text-dim);
 }
+.dot.err {
+  background: var(--danger);
+}
+.dot.warn {
+  background: var(--warn);
+}
+.dot.info {
+  background: var(--accent);
+}
+
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(210, 153, 34, 0.3);
+  border-top-color: var(--warn);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sim-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.sim-note {
+  margin: 0 0 12px;
+}
+.badge.reported {
+  background: rgba(79, 140, 255, 0.15);
+  color: var(--accent);
+}
 
 .btn-link {
   color: var(--accent);
@@ -163,7 +205,8 @@ main {
 .card-head {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 10px;
   margin-bottom: 12px;
 }
 .card-head .title {

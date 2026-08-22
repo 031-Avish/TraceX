@@ -13,7 +13,7 @@ locals {
   alarm_4xx_name     = "acme-payment-4xx-warning"
   alarm_latency_name = "acme-payment-high-latency"
   alarm_fatal_name   = "acme-payment-fatal-error"
-  chaos_param        = "/presidio-demo/chaos-mode"
+  chaos_param        = "/acme-payment-service/ops/health-override"
 }
 
 # ── SSM Parameter: The Chaos Switch ──────────────────────────
@@ -63,24 +63,27 @@ resource "aws_iam_role_policy" "demo_app_policy" {
 
 # ── Demo App Lambda (Payment Service) ────────────────────────
 resource "null_resource" "demo_app_deps" {
-  triggers = { pkg = filemd5("${path.module}/../lambda-demo-app/package.json") }
+  triggers = { pkg = filemd5("${path.module}/../acme-payment-service/package.json") }
   provisioner "local-exec" {
     command     = "npm install --production"
-    working_dir = "${path.module}/../lambda-demo-app"
+    working_dir = "${path.module}/../acme-payment-service"
   }
 }
 
+# Source lives in acme-payment-service/ — a standalone repo (pushed
+# separately to github.com/031-Avish/acme-payment-service) so the
+# customer's application code isn't nested inside TraceX's own repo.
 data "archive_file" "demo_app_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/../lambda-demo-app"
+  source_dir  = "${path.module}/../acme-payment-service"
   output_path = "${path.module}/../.build/demo-app.zip"
-  excludes    = [".env"]
+  excludes    = [".env", ".git", ".gitignore", "README.md"]
   depends_on  = [null_resource.demo_app_deps]
 }
 
 resource "aws_lambda_function" "payment_service" {
   function_name    = "acme-payment-service"
-  description      = "Fake payment API — chaos-switchable for demo"
+  description      = "Acme Corp payment API — connected to github.com/031-Avish/acme-payment-service"
   role             = aws_iam_role.demo_app_role.arn
   handler          = "index.handler"
   runtime          = "nodejs18.x"
@@ -96,10 +99,10 @@ resource "aws_lambda_function" "payment_service" {
 
   environment {
     variables = {
-      CHAOS_PARAM_NAME       = local.chaos_param
-      BREAKING_COMMIT_SHA    = var.breaking_commit_sha
-      BREAKING_COMMIT_MSG    = var.breaking_commit_msg
-      BREAKING_COMMIT_AUTHOR = var.breaking_commit_author
+      HEALTH_OVERRIDE_PARAM_NAME  = local.chaos_param
+      ACME_BREAKING_COMMIT_SHA    = var.breaking_commit_sha
+      ACME_BREAKING_COMMIT_MSG    = var.breaking_commit_msg
+      ACME_BREAKING_COMMIT_AUTHOR = var.breaking_commit_author
     }
   }
 

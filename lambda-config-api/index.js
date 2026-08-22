@@ -20,7 +20,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, QueryCommand, PutCommand, DeleteCommand } = require("@aws-sdk/lib-dynamodb");
+const { DynamoDBDocumentClient, QueryCommand, PutCommand, DeleteCommand, GetCommand } = require("@aws-sdk/lib-dynamodb");
 const {
   SecretsManagerClient,
   CreateSecretCommand,
@@ -28,10 +28,21 @@ const {
   GetSecretValueCommand,
   DeleteSecretCommand,
 } = require("@aws-sdk/client-secrets-manager");
+const { SSMClient, PutParameterCommand } = require("@aws-sdk/client-ssm");
+const {
+  LambdaClient,
+  InvokeCommand,
+  PutFunctionConcurrencyCommand,
+  DeleteFunctionConcurrencyCommand,
+} = require("@aws-sdk/client-lambda");
+const { CloudWatchClient, DescribeAlarmsCommand } = require("@aws-sdk/client-cloudwatch");
 
 const raw = new DynamoDBClient({});
 const db = DynamoDBDocumentClient.from(raw);
 const sm = new SecretsManagerClient({});
+const ssmClient = new SSMClient({});
+const lambdaClient = new LambdaClient({});
+const cw = new CloudWatchClient({});
 const TABLE_NAME = process.env.CONNECTOR_TABLE_NAME;
 const KMS_KEY_ID = process.env.CONNECTOR_KMS_KEY_ID;
 
@@ -43,6 +54,20 @@ const CORS_HEADERS = {
 
 const CONNECTOR_TYPES = new Set(["cloudwatch", "github", "slack", "datadog"]);
 const SECRET_FIELDS = new Set(["token", "apiKey", "appKey"]);
+
+// ── Simulate incident registry ────────────────────────────────
+// Small hardcoded map from appId → how to break/heal it. Each demo
+// incident scenario has its own mechanism: an SSM chaos toggle an app
+// reads on every request ("ssm"), a one-shot payload sent directly to a
+// Lambda ("invoke", no heal step — it's not a persistent state flip), or
+// a real AWS throttle induced by zeroing reserved concurrency
+// ("concurrency" — the pure infra/capacity scenario with zero code
+// correlation, see shopco-platform/terraform/observability.tf).
+const SIMULATE_REGISTRY = {
+  "payment-service": { type: "ssm", param: "/shopco/chaos/payment", onValue: "true", offValue: "false" },
+  "acme-payment-service": { type: "ssm", param: "/acme-payment-service/ops/health-override", onValue: "true", offValue: "false" },
+  "inventory-service": { type: "concurrency", functionName: "shopco-inventory-service", reservedConcurrentExecutions: 0 },
+};
 
 exports.handler = async (event) => {
   const method = event.requestContext?.http?.method || "GET";
@@ -67,6 +92,15 @@ exports.handler = async (event) => {
     if (path.startsWith("/applications/") && method === "DELETE") {
       const appId = decodeURIComponent(path.split("/")[2]);
       return await deleteItem(qs.tenantId, `APP#${appId}`);
+    }
+
+    if (path.startsWith("/simulate/")) {
+      // /simulate/{appId}/{break|heal|status}
+      const [, , rawAppId, action] = path.split("/");
+      const appId = decodeURIComponent(rawAppId || "");
+      if (action === "break" && method === "POST") return await simulateBreak(appId);
+      if (action === "heal" && method === "POST") return await simulateHeal(appId);
+      if (action === "status" && method === "GET") return await simulateStatus(qs.tenantId, appId);
     }
 
     return respond(404, { error: `No route for ${method} ${path}` });
@@ -281,6 +315,107 @@ async function deleteItem(tenantId, sk) {
   if (!tenantId) return respond(400, { error: "tenantId is required" });
   await db.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { tenantId, sk } }));
   return respond(200, { ok: true });
+}
+
+// ── Simulate incident routes ──────────────────────────────────
+// Lets the console UI (or a curl one-liner) flip a real failure on/off for
+// one of the demo apps without anyone touching AWS console or Terraform.
+// Every mechanism here is safe and instantly reversible — see
+// SIMULATE_REGISTRY above for what each appId actually does.
+
+async function simulateBreak(appId) {
+  const entry = SIMULATE_REGISTRY[appId];
+  if (!entry) return respond(404, { error: `No simulate mechanism registered for appId "${appId}"` });
+
+  try {
+    if (entry.type === "ssm") {
+      await ssmClient.send(new PutParameterCommand({ Name: entry.param, Value: entry.onValue, Type: "String", Overwrite: true }));
+    } else if (entry.type === "invoke") {
+      // Fire-and-forget — this is a one-shot trigger, not a persistent
+      // state flip, so we don't wait on (or need to reverse) it.
+      await lambdaClient.send(
+        new InvokeCommand({
+          FunctionName: entry.functionName,
+          InvocationType: "Event",
+          Payload: Buffer.from(JSON.stringify(entry.payload || {})),
+        })
+      );
+    } else if (entry.type === "concurrency") {
+      await lambdaClient.send(
+        new PutFunctionConcurrencyCommand({
+          FunctionName: entry.functionName,
+          ReservedConcurrentExecutions: entry.reservedConcurrentExecutions,
+        })
+      );
+    } else {
+      return respond(400, { error: `Unknown simulate mechanism type "${entry.type}"` });
+    }
+    return respond(200, { success: true });
+  } catch (error) {
+    console.error(error);
+    return respond(500, { success: false, error: error.message });
+  }
+}
+
+async function simulateHeal(appId) {
+  const entry = SIMULATE_REGISTRY[appId];
+  if (!entry) return respond(404, { error: `No simulate mechanism registered for appId "${appId}"` });
+
+  try {
+    if (entry.type === "ssm") {
+      await ssmClient.send(new PutParameterCommand({ Name: entry.param, Value: entry.offValue || "false", Type: "String", Overwrite: true }));
+    } else if (entry.type === "concurrency") {
+      await lambdaClient.send(new DeleteFunctionConcurrencyCommand({ FunctionName: entry.functionName }));
+    }
+    // "invoke" is a one-shot trigger — nothing to reverse.
+    return respond(200, { success: true });
+  } catch (error) {
+    console.error(error);
+    return respond(500, { success: false, error: error.message });
+  }
+}
+
+async function simulateStatus(tenantId, appId) {
+  if (!tenantId) return respond(400, { error: "tenantId is required" });
+
+  const appItem = await db.send(new GetCommand({ TableName: TABLE_NAME, Key: { tenantId, sk: `APP#${appId}` } }));
+  const alarmName = appItem.Item?.config?.alarmName || null;
+
+  let alarmState = null;
+  if (alarmName) {
+    try {
+      const alarmResult = await cw.send(new DescribeAlarmsCommand({ AlarmNames: [alarmName] }));
+      alarmState = alarmResult.MetricAlarms?.[0]?.StateValue || null;
+    } catch (error) {
+      console.error(`Could not describe alarm ${alarmName}: ${error.message}`);
+    }
+  }
+
+  // Same key shape lambda-agent/src/incidents/incident-store.js's
+  // findLatestIncident already uses — sk = INCIDENT#<alarmName>#<startedAt>,
+  // most recent first.
+  let incident = null;
+  if (alarmName) {
+    const incidentResult = await db.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: "tenantId = :t AND begins_with(sk, :p)",
+        ExpressionAttributeValues: { ":t": tenantId, ":p": `INCIDENT#${alarmName}#` },
+        ScanIndexForward: false,
+        Limit: 1,
+      })
+    );
+    incident = incidentResult.Items?.[0] || null;
+  }
+
+  return respond(200, {
+    appId,
+    alarmName,
+    alarmState,
+    incidentState: incident?.state || null,
+    confidence: incident?.confidence ?? null,
+    severity: incident?.severity ?? null,
+  });
 }
 
 async function queryTenant(tenantId, skPrefix) {

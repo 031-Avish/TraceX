@@ -175,6 +175,13 @@ module.exports.main = async (event) => {
     confidence: triageResult.confidence,
     severity: triageResult.severity,
     reportMessageTs: slackResult.messageTs || "",
+    // Full triage brief text — persisted alongside the Slack post so a UI can
+    // display the real brief content without needing Slack API access.
+    rootCause: triageResult.rootCause,
+    timeline: triageResult.timeline,
+    financialImpact: triageResult.financialImpact,
+    remediation: triageResult.remediation,
+    investigationPath: triageResult.investigationPath,
     ...(slackResult.error ? { error: slackResult.error } : {}),
   });
 

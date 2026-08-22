@@ -7,7 +7,7 @@ echo ""
 echo "✅ Healing the payment service..."
 
 aws ssm put-parameter \
-  --name "/presidio-demo/chaos-mode" \
+  --name "/acme-payment-service/ops/health-override" \
   --value "false" \
   --type String \
   --overwrite \

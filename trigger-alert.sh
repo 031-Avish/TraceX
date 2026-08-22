@@ -33,7 +33,7 @@ case "$SCENARIO" in
     ;;
   5xx)
     aws ssm put-parameter \
-      --name "/presidio-demo/chaos-mode" \
+      --name "/acme-payment-service/ops/health-override" \
       --value "true" \
       --type String \
       --overwrite \

@@ -50,13 +50,13 @@ variable "github_repo_name" {
 # ── The breaking commit (from your GitHub repo) ──
 variable "breaking_commit_sha" {
   type    = string
-  default = "a3f8b2c"
+  default = "a58fee9"
 }
 variable "breaking_commit_msg" {
   type    = string
-  default = "refactor: payment service cleanup - remove legacy null checks"
+  default = "perf: right-size ledger connection pool for new Lambda concurrency limits"
 }
 variable "breaking_commit_author" {
   type    = string
-  default = "dev-jsmith"
+  default = "acme-dev"
 }
